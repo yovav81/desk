@@ -1,0 +1,4 @@
+sec_id,symbol,name,asset_type,market,price_source
+AAPL,AAPL,Apple Inc,stock,US,yfinance
+MSFT,MSFT,Microsoft Corp,stock,US,yfinance
+629014,TEVA.TA,Teva Pharmaceutical Industries,stock,TASE,yfinance

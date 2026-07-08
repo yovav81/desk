@@ -1,0 +1,41 @@
+name: collect
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: desk-collect
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    env:
+      DESK_DB_URL: ${{ secrets.DESK_DB_URL }}
+      DESK_DEFAULT_USER: ${{ secrets.DESK_DEFAULT_USER }}
+      GMAIL_USER: ${{ secrets.GMAIL_USER }}
+      GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Require DESK_DB_URL
+        run: |
+          if [ -z "$DESK_DB_URL" ]; then
+            echo "::error::DESK_DB_URL secret is not set — refusing to run against no persistent DB."
+            exit 1
+          fi
+
+      - name: Collect news
+        run: python -m desk.collect_news
+
+      - name: Collect email
+        run: python -m desk.collect_email
