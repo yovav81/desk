@@ -146,4 +146,5 @@ def tag(msg_from, subject, body, companies):
 3. TheMarker feed freshness (stale first item) — re-check before including.
 4. yfinance ILA: spot-check a few more .TA names (incl. dual-listed) to confirm ILA is uniform.
 5. Google News polling cadence limits — establish a polite interval (e.g. 15 min) empirically.
-6. gh CLI/GitHub push status — see repo notes in TODO.md.
+6. GitHub: `gh` CLI is **not installed** on this machine — private repo `yovav81/desk-dashboard`
+   was NOT created/pushed. Install gh + `gh auth login`, then create the repo and push.
