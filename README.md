@@ -63,12 +63,19 @@ doesn't carry TASE bonds; DataHub's EOD bond product is paid, ~$100/mo).
 
 ## Collectors
 
-Both collectors are idempotent (safe to re-run) and touch only `DESK_DB_URL`.
+All collectors are idempotent (safe to re-run) and touch only `DESK_DB_URL`.
 
 - **`desk/collect_news.py`** — for every security on any user's watchlist,
   queries Google News RSS (Hebrew/Israel for `market=TASE`, English/US
-  otherwise) and inserts new items. For better Israeli results, keep
-  `name` in `securities.csv` in Hebrew for TASE rows.
+  otherwise) and inserts new items with `category='stock'`. For better
+  Israeli results, keep `name` in `securities.csv` in Hebrew for TASE rows.
+- **`desk/collect_macro.py`** — general Israeli-economy / market-review
+  headlines **not** tied to any watchlist security. Pulls Globes RSS section
+  feeds (`iID=2` home/economy, `iID=585` capital markets — verified alive,
+  Hebrew UTF-8) and inserts with `category='macro'`, `sec_id=NULL`. Extend
+  `MACRO_FEEDS` to add more. Calcalist/Bizportal block direct RSS (WAF/
+  Cloudflare 403, Phase 0) — not fought here; their stories still arrive
+  per-security via Google News. Fail-soft: a dead feed is logged and skipped.
 - **`desk/collect_email.py`** — polls a dedicated Gmail inbox over IMAP for
   `UNSEEN` mail, parses subject/sender/body (HTML via BeautifulSoup),
   best-effort tags each message to a security by sender/subject/body
@@ -77,8 +84,22 @@ Both collectors are idempotent (safe to re-run) and touch only `DESK_DB_URL`.
   leaves it for retry. If `GMAIL_USER`/`GMAIL_APP_PASSWORD` aren't set, it
   exits cleanly as a no-op (useful for local dev without mail creds).
 
-Run manually: `python -m desk.collect_news`, `python -m desk.collect_email`,
-`python -m desk.collect_prices`.
+Run manually: `python -m desk.collect_news`, `python -m desk.collect_macro`,
+`python -m desk.collect_email`, `python -m desk.collect_prices`.
+
+### News categories & the three-way panel filter
+
+`news.category` is `'stock'` (per-security, from `collect_news`) or `'macro'`
+(general economy, from `collect_macro`, always `sec_id=NULL`). Emails carry no
+category column — the **read-time rule** is: an email with `sec_id` **NOT
+NULL** is stock-related, `sec_id` **NULL** is macro (simpler than a duplicate
+column; the dashboard applies it in its query). The UI's three filters map to:
+
+- **My stocks** — `news.category='stock'` joined to the user's `watchlist`
+  sec_ids, plus emails with `sec_id` in that watchlist.
+- **Macro & reviews** — `news.category='macro'` (all users share it), plus
+  emails with `sec_id IS NULL`.
+- **All** — the union of the two.
 
 ## Prices (two tiers)
 

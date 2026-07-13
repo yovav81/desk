@@ -27,12 +27,21 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   raw `.insert()` for any table with a UNIQUE constraint.
 - `desk/securities.py` — loads `data/securities.csv`, lookup only. Does not
   touch prices.
-- `desk/collect_news.py`, `desk/collect_email.py`, `desk/collect_prices.py`,
-  `desk/collect_maya.py` — **cloud collectors, WRITE-only** against
-  `DESK_DB_URL`. Meant to run unattended on a schedule
+- `desk/collect_news.py`, `desk/collect_macro.py`, `desk/collect_email.py`,
+  `desk/collect_prices.py`, `desk/collect_maya.py` — **cloud collectors,
+  WRITE-only** against `DESK_DB_URL`. Meant to run unattended on a schedule
   (`.github/workflows/collect.yml`, every 15 min). The eventual dashboard is
   **READ-only** against the same DB — never merge write/collection logic
   into dashboard code.
+- **News categories & macro** (`news.category` = `'stock'` | `'macro'`):
+  `collect_news.py` writes per-security `'stock'` rows; `collect_macro.py`
+  writes general-economy `'macro'` rows (`sec_id=NULL`) from Globes RSS
+  section feeds (`MACRO_FEEDS`: iID=2 home/economy, iID=585 capital markets —
+  Calcalist/Bizportal block direct RSS, don't fight it). Emails have **no**
+  category column — the read-time rule is `sec_id NOT NULL` = stock,
+  `sec_id NULL` = macro. The dashboard's three filters map to: **My stocks** =
+  `category='stock'` ∩ the user's watchlist (+ their stock emails); **Macro &
+  reviews** = `category='macro'` (+ unassigned emails); **All** = the union.
 - **MAYA filings** (`desk/collect_maya.py`, `desk/maya_ids.py`,
   `desk/maya_client.py`) — company disclosure **announcements** (headline +
   date + document link) for watchlisted TASE securities. The pattern was

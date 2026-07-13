@@ -71,6 +71,7 @@ news = Table(
     Column("published_at", DateTime(timezone=True), nullable=True),
     Column("fetched_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
     Column("summary", Text, nullable=True),
+    Column("category", String(16), nullable=False, server_default="stock"),  # stock | macro
 )
 Index("ix_news_published_at", news.c.published_at)
 
@@ -182,13 +183,20 @@ def upsert(engine, table: Table, index_elements: list[str], values: dict):
 def _migrate(engine) -> None:
     """Idempotent additive migrations for DBs created before newer columns existed."""
     insp = inspect(engine)
-    if "securities" in insp.get_table_names():
+    tables = insp.get_table_names()
+    if "securities" in tables:
         cols = {c["name"] for c in insp.get_columns("securities")}
         with engine.begin() as conn:
             if "yahoo_symbol" not in cols:
                 conn.execute(text("ALTER TABLE securities ADD COLUMN yahoo_symbol VARCHAR(32)"))
             if "maya_company_id" not in cols:
                 conn.execute(text("ALTER TABLE securities ADD COLUMN maya_company_id INTEGER"))
+    if "news" in tables:
+        news_cols = {c["name"] for c in insp.get_columns("news")}
+        if "category" not in news_cols:
+            # Existing rows are all per-security -> keep them 'stock'.
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE news ADD COLUMN category VARCHAR(16) NOT NULL DEFAULT 'stock'"))
 
 
 def init_db(engine=None) -> None:

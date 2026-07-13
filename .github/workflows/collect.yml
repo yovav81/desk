@@ -40,6 +40,9 @@ jobs:
       - name: Collect news
         run: python -m desk.collect_news
 
+      - name: Collect macro news
+        run: python -m desk.collect_macro
+
       - name: Collect email
         run: python -m desk.collect_email
 

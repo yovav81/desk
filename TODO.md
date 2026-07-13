@@ -86,6 +86,19 @@
 - [x] Verified: suggest "בנק לאומי" → 604611; no-stock → clean message;
       Sano 813014 / Bagira 1242882 / AAPL unchanged (no regression).
 
+## Phase 2c-1c: macro news + category tagging — DONE (2026-07-13)
+- [x] Schema: `news.category` ('stock' | 'macro', default 'stock', idempotent
+      ALTER; existing rows backfill to 'stock') — desk/db.py
+- [x] desk/collect_macro.py — Globes RSS macro feeds (iID=2 home/economy,
+      iID=585 capital markets; MACRO_FEEDS config) → news category='macro',
+      sec_id NULL, url dedup, fail-soft. Verified live: 25 rows inserted,
+      re-run 0 new.
+- [x] Email macro rule (read-time, no schema change): sec_id NULL = macro,
+      NOT NULL = stock. Documented in README.
+- [x] Three-way panel filter (My stocks / Macro & reviews / All) proven
+      expressible as queries; documented in README.
+- [x] collect.yml: macro step after news.
+
 ## Phase 2c-2: React UI (next)
 - [ ] Hosted, multi-user, mobile-friendly React dashboard, READ-only against
       DESK_DB_URL — per-user watchlist view over shared news/email/price data
