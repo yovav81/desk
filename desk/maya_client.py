@@ -30,6 +30,10 @@ BASE = "https://maya.tase.co.il/"
 SEARCH_URL = "https://apicontent.tase.co.il/api/search/market"
 AUTOCOMPLETE_URL = "https://maya.tase.co.il/api/v1/companies/autocomplete"
 REPORTS_URL = "https://maya.tase.co.il/api/v1/reports/companies"
+# companyId -> company profile incl. `mainSecurityId` (MAYA's designated
+# primary/ordinary share) and `isBond`. Used to turn a name/company hit into a
+# tradeable security number.
+COMPANY_DETAILS_URL = "https://maya.tase.co.il/api/v1/companies/{company_id}/details"
 DOC_BASE = "https://mayafiles.tase.co.il/"
 DETAIL_BASE = "https://maya.tase.co.il/reports/details/"
 

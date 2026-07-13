@@ -74,10 +74,17 @@
       (AAPL/MSFT/TEVA ADR), TASE clean (822015/1242882/629014 → yfinance),
       Sano 813014 + Bio-Dvash 1082346 → manual (NaN trap), garbage → NotFound,
       add_to_db idempotent (re-run unchanged).
-- [ ] OPEN ISSUE (follow-up): company-vs-security suggest gap — generic Hebrew
-      terms (e.g. "בנק") return MAYA company rows (companyId), not `מניות`
-      security-number rows, so suggest yields none. Needs a company→security
-      hop or UI-side company expansion. Not a blocker for the engine.
+## Phase 2c-1b: company name → primary stock — DONE (2026-07-13)
+- [x] Closes the 2c-1 OPEN ISSUE. Investigation found
+      `api/v1/companies/<id>/details.mainSecurityId` = MAYA's authoritative
+      primary/ordinary share (verified 7 companies incl. Bio-Dvash cross-check
+      and a no-stock company → null). See research/COMPANY_PRIMARY_FINDINGS.md.
+- [x] desk/onboarding.py: `resolve_company_to_primary_stock(company_id)` (None
+      for bond-only/no-stock — never guesses a series); `_maya_suggest` now
+      turns company name hits into resolvable primary-stock suggestions, and
+      surfaces no-stock companies as NOT-RESOLVABLE-BY-NAME.
+- [x] Verified: suggest "בנק לאומי" → 604611; no-stock → clean message;
+      Sano 813014 / Bagira 1242882 / AAPL unchanged (no regression).
 
 ## Phase 2c-2: React UI (next)
 - [ ] Hosted, multi-user, mobile-friendly React dashboard, READ-only against

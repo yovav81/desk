@@ -84,8 +84,13 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   reason, never a fabricated symbol. yfinance rejects numeric `.TA`
   (`629014.TA` 404s), and there's no free number→ticker source, so TASE letter
   tickers come from the known mapping; unknown TASE securities fall back to
-  manual. Known gap: generic Hebrew name searches surface MAYA *company* rows
-  (companyId), not security-number rows — see TODO 2c-1 open issue.
+  manual. **Name → primary stock:** a company-name search resolves to the
+  company's PRIMARY STOCK only, via MAYA's authoritative `mainSecurityId`
+  (`api/v1/companies/<id>/details`) — `resolve_company_to_primary_stock()`.
+  Bonds/other series are added by their exact security number; a company with
+  no stock (bond-only issuer) is surfaced as NOT-RESOLVABLE-BY-NAME with a
+  hint to enter a number — never a guessed series (see
+  research/COMPANY_PRIMARY_FINDINGS.md).
 - `data/securities.csv` — the security-number/symbol/name/type/market
   mapping. TASE has no scriptable export (WAF-blocked, see Phase 0
   findings); seeded via manual browser export or (future) TASE DataHub's

@@ -29,7 +29,13 @@ from sqlalchemy import select
 
 from desk.collect_prices import closes_series
 from desk.db import get_engine, init_db, securities
-from desk.maya_client import SEARCH_URL, gate_cleared, harvest_cookies, make_session
+from desk.maya_client import (
+    COMPANY_DETAILS_URL,
+    SEARCH_URL,
+    gate_cleared,
+    harvest_cookies,
+    make_session,
+)
 from desk.maya_ids import resolve_company_id
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -149,21 +155,88 @@ def _maya_search(session, query: str) -> list[dict]:
         return []
 
 
+MAX_COMPANY_RESOLUTIONS = 6  # bound the extra /details calls per suggest()
+
+
+def resolve_company_to_primary_stock(company_id, session=None) -> int | None:
+    """Company -> its PRIMARY STOCK security number, or None.
+
+    MAYA's `companies/<id>/details.mainSecurityId` is the exchange's own
+    designated ordinary share (verified across banks, dual-listed, and
+    small caps). Returns None — meaning NOT-RESOLVABLE-BY-NAME — when the
+    company has no primary stock (bond-only issuer or nothing listed:
+    `mainSecurityId` is null, or `isBond` is set). Never guesses a series.
+    """
+    session = session or _get_maya_session()
+    if session is None or company_id is None:
+        return None
+    try:
+        r = session.get(COMPANY_DETAILS_URL.format(company_id=company_id), timeout=30)
+    except Exception as e:
+        log.info("company %s details fetch failed: %s", company_id, e)
+        return None
+    if r.status_code != 200:
+        return None
+    try:
+        d = r.json()
+    except Exception:
+        return None
+    main = d.get("mainSecurityId")
+    if main is None or d.get("isBond"):
+        return None
+    try:
+        return int(main)
+    except (TypeError, ValueError):
+        return None
+
+
 def _maya_suggest(query: str) -> list[Suggestion]:
+    """Suggestions for an Israeli query. Direct security ('מניות') rows become
+    security-number suggestions; company rows resolve to their PRIMARY STOCK.
+    A company with no primary stock is surfaced as not-resolvable-by-name."""
     session = _get_maya_session()
     if session is None:
         return []
-    out = []
-    seen = set()
-    for row in _maya_search(session, query):
-        # Only tradeable securities ('מניות') carry a security number we onboard by.
+    rows = _maya_search(session, query)
+    out: list[Suggestion] = []
+    seen: set[str] = set()
+
+    # 1. Direct tradeable securities — carry a security number already.
+    for row in rows:
         if row.get("category") != "מניות":
             continue
         num = str(row.get("id") or "")
-        if not num or num in seen:
+        if num and num not in seen:
+            seen.add(num)
+            out.append(Suggestion("TASE", row.get("name") or num, num, "TASE security"))
+
+    # 2. Company hits -> primary stock. A name search resolves to the company's
+    #    ordinary share only; bonds/other series need their exact number.
+    company_rows = []
+    seen_cids = set()
+    for row in rows:
+        if "/he/companies/" not in (row.get("url") or ""):
+            continue
+        cid = str(row.get("id") or "")
+        if cid and cid not in seen_cids:
+            seen_cids.add(cid)
+            company_rows.append(row)
+
+    for row in company_rows[:MAX_COMPANY_RESOLUTIONS]:
+        cid = row.get("id")
+        name = row.get("name") or ""
+        primary = resolve_company_to_primary_stock(cid, session)
+        if primary is None:
+            key = f"company:{cid}"
+            if key not in seen:
+                seen.add(key)
+                out.append(Suggestion("TASE", name, "", "company has no primary stock — enter a security number"))
+            continue
+        num = str(primary)
+        if num in seen:
             continue
         seen.add(num)
-        out.append(Suggestion("TASE", row.get("name") or num, num, "TASE security"))
+        out.append(Suggestion("TASE", name, num, "TASE stock (company primary)"))
     return out
 
 
@@ -203,7 +276,9 @@ def suggest(query: str) -> list[Suggestion]:
     seen = set()
     ranked = []
     for s in sorted(out, key=lambda x: 0 if x.symbol_or_number.upper() == ql else 1):
-        key = (s.market, s.symbol_or_number)
+        # Empty identifier = not-resolvable company; dedupe those by name so
+        # several distinct no-stock companies all survive.
+        key = (s.market, s.symbol_or_number or f"~{s.display_name}")
         if key in seen:
             continue
         seen.add(key)
