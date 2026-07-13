@@ -22,6 +22,11 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   fully separate from the Python collectors in `desk/` (which it never
   imports). Product/brand name is **"GOLD"**; the repo/folder stays "desk".
   Dark, Hebrew **RTL**, Heebo + IBM Plex Mono. Run: `cd web && npm run dev`.
+- **Colors** are centralized in `web/src/theme.js` — never hardcode colors in
+  components. The accent is **gold** (`acc` `#D4AF37`, with `accHover`/`accSoft`/
+  `accDim`/`onAcc`), used decoratively (logo mark, primary button, focus rings,
+  active tab/filter, thin accent lines). `grn`/`red` are **functional** —
+  reserved for gains/losses on returns — and must never be reused as accents.
 - **Auth is Supabase** (`web/src/supabaseClient.js`,
   `signInWithPassword`). `web/.env` (gitignored; names in `web/.env.example`)
   holds `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY`. The anon key is the
