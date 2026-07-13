@@ -1,14 +1,15 @@
 """Idempotent seed loader: data/securities.csv + data/watchlist_seed.csv -> DESK_DB_URL.
 
-Safe to re-run: uses insert_ignore() (INSERT ... ON CONFLICT DO NOTHING) for
-every insert, so a second run always inserts 0 new rows.
+Safe to re-run. `securities` rows are upserted so CSV edits (new tickers,
+corrected symbols, yahoo_symbol overrides) propagate to an already-seeded DB;
+`users`/`watchlist` use insert_ignore so re-runs add no duplicate rows.
 """
 import csv
 from pathlib import Path
 
 from sqlalchemy import func, select
 
-from desk.db import get_engine, init_db, insert_ignore, securities, users, watchlist
+from desk.db import get_engine, init_db, insert_ignore, securities, upsert, users, watchlist
 
 ROOT = Path(__file__).resolve().parent.parent
 SECURITIES_CSV = ROOT / "data" / "securities.csv"
@@ -24,7 +25,7 @@ def seed(engine=None) -> None:
     with engine.begin() as conn:
         for row in sec_rows:
             values = {k: (v or None) for k, v in row.items()}  # empty CSV cells (yahoo_symbol) -> NULL
-            conn.execute(insert_ignore(engine, securities, ["sec_id"]).values(**values))
+            conn.execute(upsert(engine, securities, ["sec_id"], values))
 
     with open(WATCHLIST_CSV, newline="", encoding="utf-8") as f:
         wl_rows = list(csv.DictReader(f))

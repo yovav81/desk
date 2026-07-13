@@ -24,6 +24,7 @@ from sqlalchemy import (
     inspect,
     text,
 )
+from sqlalchemy.engine import make_url
 
 metadata = MetaData()
 
@@ -115,9 +116,26 @@ manual_prices = Table(
 )
 
 
+def _needs_prepared_statements_disabled(url) -> bool:
+    """True for Postgres behind a transaction pooler (pgbouncer), where
+    psycopg3 server-side prepared statements collide ("prepared statement
+    '_pg3_0' already exists"). Detects Supabase's pooler host and the
+    conventional transaction-pooler port 6543."""
+    if not url.drivername.startswith("postgresql"):
+        return False
+    host = (url.host or "").lower()
+    return "pooler.supabase.com" in host or url.port == 6543
+
+
 def get_engine(db_url: str | None = None):
-    url = db_url or os.environ.get("DESK_DB_URL", "sqlite:///desk.db")
-    return create_engine(url, future=True)
+    raw = db_url or os.environ.get("DESK_DB_URL", "sqlite:///desk.db")
+    url = make_url(raw)
+    connect_args: dict = {}
+    if _needs_prepared_statements_disabled(url):
+        # psycopg3: prepare_threshold=None never issues a server-side PREPARE,
+        # which is what the transaction pooler cannot share across connections.
+        connect_args["prepare_threshold"] = None
+    return create_engine(url, future=True, connect_args=connect_args)
 
 
 def insert_ignore(engine, table: Table, index_elements: list[str]):
