@@ -1,0 +1,28 @@
+# TEMPORARY probe — delete after 2b decision
+# Phase 2b go/no-go: does the MAYA Imperva/Incapsula cookie-harvest survive
+# from a GitHub Actions datacenter IP? Manual-only (no cron). No secrets, no DB.
+# This is NOT the production collector and must never be added to collect.yml.
+name: maya-probe (TEMPORARY)
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install playwright requests
+
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+
+      # Job passes only if the probe exits 0 (PASS = gate cleared AND live JSON).
+      - name: Run MAYA harvest probe
+        run: python research/maya_harvest_probe.py
