@@ -3,3 +3,9 @@ __pycache__/
 *.db
 .env
 
+# research investigation artifacts (throwaway data/screenshots; keep only *_FINDINGS.md)
+research/*.png
+research/*.xml
+research/*.txt
+research/maya_*.json
+
