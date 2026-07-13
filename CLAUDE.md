@@ -67,6 +67,25 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   history never overwrites good data (`status` = `no_data`/`stale`).
 - Yahoo symbol resolution: `securities.yahoo_symbol` override, else
   `symbol` + `.TA` for `market=TASE` (`securities.resolve_yahoo_symbol`).
+- **Onboarding engine** (`desk/onboarding.py`, CLI `desk/onboard_cli.py`) —
+  the backend core behind "add any security" (no UI; that's 2c-2). Three
+  functions: `suggest(query)` (partial input → ranked, de-duped, multiple
+  matches — never auto-picks), `resolve(market, identifier)` → `ResolvedSecurity`
+  or `NotFound`, and `add_to_db(resolved)` (idempotent upsert into `securities`;
+  never touches `watchlist`, never downgrades a good row — `yfinance`→`manual`
+  is refused and set fields aren't clobbered with NULL). It **reuses**, never
+  re-implements: the SEC ticker map (`company_tickers.json`) for US identity,
+  MAYA search + the 2-hop companyId from `desk/maya_ids`, and the yfinance
+  NaN guard (`collect_prices.closes_series`) for price existence.
+  **Manual-fallback rule:** a ticker that yfinance can't price with real
+  non-NaN closes (e.g. `SANO.TA`, `BDVSH.TA`) resolves to
+  `price_source='manual'` — never a guessed price. **No-guess policy:** every
+  network path is fail-soft; unresolvable input returns `NotFound` with a
+  reason, never a fabricated symbol. yfinance rejects numeric `.TA`
+  (`629014.TA` 404s), and there's no free number→ticker source, so TASE letter
+  tickers come from the known mapping; unknown TASE securities fall back to
+  manual. Known gap: generic Hebrew name searches surface MAYA *company* rows
+  (companyId), not security-number rows — see TODO 2c-1 open issue.
 - `data/securities.csv` — the security-number/symbol/name/type/market
   mapping. TASE has no scriptable export (WAF-blocked, see Phase 0
   findings); seeded via manual browser export or (future) TASE DataHub's

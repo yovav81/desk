@@ -63,11 +63,26 @@
 - [x] collect.yml: Chromium install + maya step after prices; requirements.txt
       gains playwright
 
-## Phase 2c: React UI
+## Phase 2c-1: security onboarding engine (backend) — DONE (2026-07-13)
+- [x] desk/onboarding.py — suggest() / resolve() / add_to_db(). Reuses SEC
+      ticker map (US), MAYA search + 2-hop companyId (desk/maya_ids), and the
+      yfinance NaN guard from collect_prices (junk .TA → manual, never a
+      guessed price). Fail-soft everywhere; no-guess policy.
+- [x] desk/onboard_cli.py — `python -m desk.onboard_cli {suggest|resolve}`
+      (resolve --add to persist).
+- [x] Validated live (research/ONBOARDING_VALIDATION.md): US clean
+      (AAPL/MSFT/TEVA ADR), TASE clean (822015/1242882/629014 → yfinance),
+      Sano 813014 + Bio-Dvash 1082346 → manual (NaN trap), garbage → NotFound,
+      add_to_db idempotent (re-run unchanged).
+- [ ] OPEN ISSUE (follow-up): company-vs-security suggest gap — generic Hebrew
+      terms (e.g. "בנק") return MAYA company rows (companyId), not `מניות`
+      security-number rows, so suggest yields none. Needs a company→security
+      hop or UI-side company expansion. Not a blocker for the engine.
 
-## Phase 2c: React UI
+## Phase 2c-2: React UI (next)
 - [ ] Hosted, multi-user, mobile-friendly React dashboard, READ-only against
       DESK_DB_URL — per-user watchlist view over shared news/email/price data
+- [ ] Typeahead + add-security flow over the onboarding engine (2c-1)
 
 ## Open items (carried over)
 - [ ] Decide bond price source (DataHub paid EOD vs manual tier) — manual
