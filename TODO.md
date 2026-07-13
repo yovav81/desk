@@ -99,10 +99,17 @@
       expressible as queries; documented in README.
 - [x] collect.yml: macro step after news.
 
-## Phase 2c-2: React UI (next)
-- [ ] Hosted, multi-user, mobile-friendly React dashboard, READ-only against
-      DESK_DB_URL — per-user watchlist view over shared news/email/price data
-- [ ] Typeahead + add-security flow over the onboarding engine (2c-1)
+## Phase 2c-2: React UI ("GOLD")
+- [x] Step 1 — skeleton + Supabase auth (login only) — DONE (2026-07-13).
+      Vite+React (JS) in web/; Supabase signInWithPassword; dark RTL Hebrew
+      login matching design_reference; post-login placeholder (email +
+      logout). No data yet. `cd web && npm run dev`. web/.env (gitignored)
+      holds VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY (public anon key).
+- [ ] Step 2 — watchlist table with real data (READ-only against Supabase
+      Postgres): per-user watchlist over shared securities/quotes/news.
+- [ ] Typeahead + add-security flow over the onboarding engine (2c-1).
+- [ ] News panel with the three filters (My stocks / Macro & reviews / All).
+- [ ] Deploy (Vercel) — not yet.
 
 ## Open items (carried over)
 - [ ] Decide bond price source (DataHub paid EOD vs manual tier) — manual

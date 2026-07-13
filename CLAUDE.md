@@ -16,6 +16,24 @@ Phase 2a = two-tier price collector (done). Next: 2b MAYA filings collector,
 All work stays inside `C:\desk`. Never read or write `C:\invest`,
 `C:\screener`, `C:\wealth`, `C:\nadlan` — unrelated projects on this machine.
 
+## Frontend (`web/`) — product name "GOLD"
+
+- The dashboard UI lives in `web/` (Vite + React, **JavaScript** not TS),
+  fully separate from the Python collectors in `desk/` (which it never
+  imports). Product/brand name is **"GOLD"**; the repo/folder stays "desk".
+  Dark, Hebrew **RTL**, Heebo + IBM Plex Mono. Run: `cd web && npm run dev`.
+- **Auth is Supabase** (`web/src/supabaseClient.js`,
+  `signInWithPassword`). `web/.env` (gitignored; names in `web/.env.example`)
+  holds `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY`. The anon key is the
+  **PUBLIC frontend key** — safe in the browser bundle. **Never** put
+  `DESK_DB_URL` or any Supabase service/secret key in `web/`; those stay
+  backend-only (the collectors' GitHub Actions secrets). The dashboard reads
+  data **READ-only**; collectors remain the only writers.
+- `design_reference/` is a **visual-only** mockup (Claude Design export) — read
+  it for colors/spacing/layout, never wire its code as the app or modify it.
+- Current state: **step 1 only** — login + a post-login placeholder. No
+  watchlist/news/prices in the UI yet (next steps).
+
 ## Architecture
 
 - `desk/db.py` — SQLAlchemy Core schema + `init_db()`. Portable SQL only (no

@@ -1,0 +1,231 @@
+import { useEffect, useState } from 'react';
+import { supabase } from './supabaseClient';
+import { theme as t } from './theme';
+
+// STEP 1 skeleton: login only. No watchlist / news / real data yet — this just
+// proves the app runs, connects to Supabase, and authenticates. Styling mirrors
+// design_reference/ (Ocean theme) but is our own clean implementation.
+
+export default function App() {
+  const [session, setSession] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setLoading(false);
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
+      setSession(s);
+    });
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  if (loading) return <Splash />;
+  return session ? <Placeholder session={session} /> : <Login />;
+}
+
+function Splash() {
+  return (
+    <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', color: t.mut }}>
+      טוען…
+    </div>
+  );
+}
+
+function Brand({ size = 22, dotSize = 12 }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div style={{ width: dotSize, height: dotSize, borderRadius: 4, background: t.acc }} />
+      <div style={{ fontSize: size, fontWeight: 700, color: t.txt, letterSpacing: '-0.3px' }}>
+        GOLD
+      </div>
+      <div style={{ fontSize: 13, color: t.mut, marginTop: 3 }}>מעקב ניירות ערך</div>
+    </div>
+  );
+}
+
+function Login() {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function onSubmit(e) {
+    e.preventDefault();
+    setErr('');
+    if (!username.trim() || !password.trim()) {
+      setErr('יש להזין שם משתמש וסיסמה');
+      return;
+    }
+    setBusy(true);
+    // Supabase Auth is email-based: the "שם משתמש" value is the user's email.
+    const { error } = await supabase.auth.signInWithPassword({
+      email: username.trim(),
+      password,
+    });
+    setBusy(false);
+    if (error) setErr('התחברות נכשלה — בדקו שם משתמש וסיסמה');
+    // On success, onAuthStateChange swaps to the placeholder.
+  }
+
+  return (
+    <div
+      style={{
+        minHeight: '100vh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: `radial-gradient(1200px 600px at 50% -10%, ${t.accSoft}, transparent 60%), ${t.bg}`,
+        padding: 24,
+      }}
+    >
+      <form
+        onSubmit={onSubmit}
+        style={{
+          width: '100%',
+          maxWidth: 380,
+          background: t.surf,
+          border: `1px solid ${t.bd}`,
+          borderRadius: 18,
+          padding: '36px 32px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 20,
+          animation: 'fadeUp .4s ease',
+        }}
+      >
+        <Brand />
+
+        <Field
+          label="שם משתמש"
+          value={username}
+          onChange={(e) => {
+            setUsername(e.target.value);
+            setErr('');
+          }}
+          autoComplete="username"
+        />
+        <Field
+          label="סיסמה"
+          type="password"
+          value={password}
+          onChange={(e) => {
+            setPassword(e.target.value);
+            setErr('');
+          }}
+          autoComplete="current-password"
+        />
+
+        {err && <div style={{ fontSize: 13, color: t.red }}>{err}</div>}
+
+        <button
+          type="submit"
+          disabled={busy}
+          style={{
+            background: t.acc,
+            color: '#08101F',
+            border: 'none',
+            borderRadius: 10,
+            padding: 13,
+            fontSize: 15,
+            fontWeight: 600,
+            fontFamily: 'Heebo, sans-serif',
+            cursor: busy ? 'default' : 'pointer',
+            opacity: busy ? 0.7 : 1,
+          }}
+        >
+          {busy ? 'מתחבר…' : 'כניסה'}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+function Field({ label, ...props }) {
+  const [focus, setFocus] = useState(false);
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <label style={{ fontSize: 13, color: t.mut }}>{label}</label>
+      <input
+        {...props}
+        onFocus={() => setFocus(true)}
+        onBlur={() => setFocus(false)}
+        style={{
+          background: t.surf2,
+          border: `1px solid ${focus ? t.acc : t.bd}`,
+          borderRadius: 10,
+          padding: '12px 14px',
+          fontSize: 15,
+          color: t.txt,
+          fontFamily: 'Heebo, sans-serif',
+          outline: 'none',
+        }}
+      />
+    </div>
+  );
+}
+
+function Placeholder({ session }) {
+  async function onLogout() {
+    await supabase.auth.signOut();
+  }
+  return (
+    <div style={{ minHeight: '100vh', background: t.bg, color: t.txt }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '14px 24px',
+          borderBottom: `1px solid ${t.bd}`,
+        }}
+      >
+        <Brand size={17} dotSize={10} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <span dir="ltr" style={{ fontSize: 13, color: t.mut, fontFamily: "'IBM Plex Mono', monospace" }}>
+            {session.user.email}
+          </span>
+          <button
+            onClick={onLogout}
+            style={{
+              background: 'none',
+              border: `1px solid ${t.bd}`,
+              borderRadius: 8,
+              padding: '6px 14px',
+              fontSize: 13,
+              color: t.mut,
+              fontFamily: 'Heebo, sans-serif',
+              cursor: 'pointer',
+            }}
+          >
+            יציאה
+          </button>
+        </div>
+      </div>
+
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 10,
+          padding: '120px 24px',
+          textAlign: 'center',
+        }}
+      >
+        <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: '-0.3px' }}>GOLD</div>
+        <div style={{ fontSize: 14, color: t.mut }}>
+          מחוברים בתור{' '}
+          <span dir="ltr" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
+            {session.user.email}
+          </span>
+        </div>
+        <div style={{ fontSize: 13, color: t.mut, marginTop: 4 }}>
+          שלד ראשוני — רשימת המעקב והחדשות יתווספו בשלב הבא
+        </div>
+      </div>
+    </div>
+  );
+}
