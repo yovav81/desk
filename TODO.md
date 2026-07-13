@@ -105,10 +105,23 @@
       login matching design_reference; post-login placeholder (email +
       logout). No data yet. `cd web && npm run dev`. web/.env (gitignored)
       holds VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY (public anon key).
-- [ ] Step 2 — watchlist table with real data (READ-only against Supabase
-      Postgres): per-user watchlist over shared securities/quotes/news.
+- [x] Step 2 — live watchlist table (READ-only) — DONE (2026-07-14).
+      web/src/useWatchlist.js reads securities+quotes via the Supabase JS
+      client; web/src/Watchlist.jsx renders the desktop RTL table (נייר /
+      מחיר / יומי / חודש / רבעון / שנה / 12ח׳), green/red returns, ידני tag +
+      "—" daily for manual rows, ₪/$ currency, count + loading/empty/error
+      states. Verified visually against representative data.
+- [ ] **TODO(auth-mapping):** `watchlist.user_id` references our own `users`
+      table, not the Supabase Auth uid. Step 2 reads the seeded "owner"
+      user's watchlist as a stand-in. Wire auth-uid ↔ users.id in a later
+      step so each user sees their own watchlist.
+- [ ] **RLS note:** tables were created by the Python collectors (raw SQL), so
+      the anon role may lack SELECT. If the table shows a permission/RLS
+      error, grant read access (see CLAUDE.md / the error message).
+- [ ] Step 3 — news panel with the three filters (My stocks / Macro & reviews
+      / All).
 - [ ] Typeahead + add-security flow over the onboarding engine (2c-1).
-- [ ] News panel with the three filters (My stocks / Macro & reviews / All).
+- [ ] Security detail page.
 - [ ] Deploy (Vercel) — not yet.
 
 ## Open items (carried over)

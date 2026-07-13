@@ -36,8 +36,23 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   data **READ-only**; collectors remain the only writers.
 - `design_reference/` is a **visual-only** mockup (Claude Design export) — read
   it for colors/spacing/layout, never wire its code as the app or modify it.
-- Current state: **step 1 only** — login + a post-login placeholder. No
-  watchlist/news/prices in the UI yet (next steps).
+- Data reads use the Supabase JS client (`web/src/useWatchlist.js`) against the
+  same Postgres the collectors write; UI stays **READ-only**. Prices are
+  already ILS-converted by the collector — the UI never divides by 100 again.
+- **Auth-uid ↔ users mapping is not wired yet:** `watchlist.user_id` points at
+  our own `users` table, not the Supabase Auth uid. The watchlist currently
+  reads the seeded **"owner"** user (`OWNER_USERNAME` in `useWatchlist.js`) as a
+  stand-in — a TODO to map properly so each user sees their own list.
+- **RLS/grants:** the collectors created these tables via raw SQL, so the
+  Supabase `anon` role may not have SELECT. If reads fail with a
+  permission/RLS error, either enable RLS with a read policy, e.g.
+  `alter table securities enable row level security; create policy anon_read on
+  securities for select to anon using (true);` (repeat for `quotes`,
+  `watchlist`, `users`), or grant read directly:
+  `grant select on securities, quotes, watchlist, users to anon;`.
+- Current state: **step 2** — login + the live watchlist table
+  (`web/src/Watchlist.jsx`). News panel, add/search, and detail page are later
+  steps.
 
 ## Architecture
 

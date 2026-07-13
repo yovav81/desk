@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { supabase } from './supabaseClient';
 import { theme as t } from './theme';
+import Watchlist from './Watchlist';
 
-// STEP 1 skeleton: login only. No watchlist / news / real data yet — this just
-// proves the app runs, connects to Supabase, and authenticates. Styling mirrors
-// design_reference/ (Ocean theme) but is our own clean implementation.
+// STEP 2: login (step 1) + the live, READ-ONLY watchlist table reading from
+// Supabase. No add/remove/search/news/detail yet — those are later steps.
+// Styling mirrors design_reference/ (Ocean theme, gold accent) but is our own
+// clean implementation.
 
 export default function App() {
   const [session, setSession] = useState(null);
@@ -22,7 +24,7 @@ export default function App() {
   }, []);
 
   if (loading) return <Splash />;
-  return session ? <Placeholder session={session} /> : <Login />;
+  return session ? <Dashboard session={session} /> : <Login />;
 }
 
 function Splash() {
@@ -166,12 +168,22 @@ function Field({ label, ...props }) {
   );
 }
 
-function Placeholder({ session }) {
+function Dashboard({ session }) {
   async function onLogout() {
     await supabase.auth.signOut();
   }
   return (
-    <div style={{ minHeight: '100vh', background: t.bg, color: t.txt }}>
+    <div
+      style={{
+        height: '100vh',
+        display: 'flex',
+        flexDirection: 'column',
+        background: t.bg,
+        color: t.txt,
+        overflow: 'hidden',
+      }}
+    >
+      {/* top bar */}
       <div
         style={{
           display: 'flex',
@@ -179,6 +191,7 @@ function Placeholder({ session }) {
           justifyContent: 'space-between',
           padding: '14px 24px',
           borderBottom: `1px solid ${t.bd}`,
+          flexShrink: 0,
         }}
       >
         <Brand size={17} dotSize={10} />
@@ -204,27 +217,9 @@ function Placeholder({ session }) {
         </div>
       </div>
 
-      <div
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 10,
-          padding: '120px 24px',
-          textAlign: 'center',
-        }}
-      >
-        <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: '-0.3px' }}>GOLD</div>
-        <div style={{ fontSize: 14, color: t.mut }}>
-          מחוברים בתור{' '}
-          <span dir="ltr" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
-            {session.user.email}
-          </span>
-        </div>
-        <div style={{ fontSize: 13, color: t.mut, marginTop: 4 }}>
-          שלד ראשוני — רשימת המעקב והחדשות יתווספו בשלב הבא
-        </div>
+      {/* content: watchlist only for now (news panel is a later step) */}
+      <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
+        <Watchlist />
       </div>
     </div>
   );
