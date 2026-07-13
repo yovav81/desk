@@ -30,10 +30,29 @@
         rule → set GMAIL_USER / GMAIL_APP_PASSWORD secrets
   - [ ] Seed data/securities.csv for real (manual TASE browser export)
 
-## Phase 2: (placeholders)
-- [ ] Pricing: yfinance quote fetch + MTD/YTD math, incl. .TA ILA→ILS ÷100
-- [ ] Decide bond price source (DataHub paid EOD vs manual) — blocks bond support
-- [ ] Sign up to TASE DataHub, verify free "Securities (Basic)" fields
-- [ ] Hosted, multi-user Streamlit dashboard (mobile-friendly) reading from
+## Phase 2a: two-tier price collector — DONE (2026-07-13)
+- [x] Schema: `quotes` (one upserted row per security) + `manual_prices`
+      (UNIQUE sec_id+price_date); `securities.yahoo_symbol` override column
+      with idempotent ALTER migration in init_db — desk/db.py
+- [x] desk/collect_prices.py — auto tier (yfinance batch fetch, ILA→ILS ÷100,
+      daily period anchors for MTD/QTD/YTD/12M, no-junk validation:
+      no_data/stale statuses) + manual tier (returns from manual_prices
+      entries, day_change NULL) — verified live: TEVA ~98 ILS, BGRA (recent
+      IPO) NULL YTD/12M, re-run produced no duplicate rows
+- [x] Manual price CLI: `python -m desk.manual_price <sec_id> <YYYY-MM-DD> <close>`
+      (ON CONFLICT updates close) — verified incl. same-date re-entry
+- [x] Seed: Sano 813014 + Bio-Dvash 1082346 (manual), Bagira 1242882 +
+      Dan Hotels 822015 (yfinance) on owner's watchlist
+- [x] collect.yml: prices step added after news/email
+
+## Phase 2b: MAYA filings collector (next)
+- [ ] Scope + build MAYA filings collector
+
+## Phase 2c: React UI
+- [ ] Hosted, multi-user, mobile-friendly React dashboard, READ-only against
       DESK_DB_URL — per-user watchlist view over shared news/email/price data
-- [ ] (Later, out of scope) read-only link to existing filings system
+
+## Open items (carried over)
+- [ ] Decide bond price source (DataHub paid EOD vs manual tier) — manual
+      tier now exists as a stopgap for unpriced securities
+- [ ] Sign up to TASE DataHub, verify free "Securities (Basic)" fields

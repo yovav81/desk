@@ -23,7 +23,8 @@ def seed(engine=None) -> None:
         sec_rows = list(csv.DictReader(f))
     with engine.begin() as conn:
         for row in sec_rows:
-            conn.execute(insert_ignore(engine, securities, ["sec_id"]).values(**row))
+            values = {k: (v or None) for k, v in row.items()}  # empty CSV cells (yahoo_symbol) -> NULL
+            conn.execute(insert_ignore(engine, securities, ["sec_id"]).values(**values))
 
     with open(WATCHLIST_CSV, newline="", encoding="utf-8") as f:
         wl_rows = list(csv.DictReader(f))

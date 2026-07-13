@@ -6,9 +6,11 @@ emails). Filings (SEC/MAYA/MAGNA) arrive later via a read-only link to an
 existing system — out of scope here.
 
 Phase 0 (`research/FINDINGS.md`) verified free data sources. **Phase 1**
-(this state) builds the data foundation only: a Postgres-ready DB schema,
-an Israeli-securities mapping, and two scheduled collectors (news, email).
-**No dashboard/UI and no price math yet — that's Phase 2.**
+built the data foundation: a Postgres-ready DB schema, an
+Israeli-securities mapping, and two scheduled collectors (news, email).
+**Phase 2a** (this state) adds a two-tier price collector. **No
+dashboard/UI yet** — next up are the MAYA filings collector (2b) and a
+React UI (2c).
 
 ## Data model
 
@@ -75,7 +77,42 @@ Both collectors are idempotent (safe to re-run) and touch only `DESK_DB_URL`.
   leaves it for retry. If `GMAIL_USER`/`GMAIL_APP_PASSWORD` aren't set, it
   exits cleanly as a no-op (useful for local dev without mail creds).
 
-Run manually: `python -m desk.collect_news`, `python -m desk.collect_email`.
+Run manually: `python -m desk.collect_news`, `python -m desk.collect_email`,
+`python -m desk.collect_prices`.
+
+## Prices (two tiers)
+
+`desk/collect_prices.py` upserts one `quotes` row per watchlisted security
+(union across users): last price, previous close, day change, and
+MTD/QTD/YTD/12M returns. `securities.price_source` picks the tier:
+
+- **`yfinance` (auto)** — batch daily history from Yahoo. The yfinance
+  ticker is `securities.yahoo_symbol` when set, otherwise the symbol
+  (+`.TA` for `market=TASE`). **`.TA` prices arrive in ILA (agorot) and are
+  stored ÷100 as ILS** — `quotes.currency` is always post-conversion.
+  Period anchors (close before month/quarter/year start, and ~12 months
+  ago) are recomputed once per calendar day (`quotes.anchors_date`);
+  in-between runs only refresh the last price and day change. Off-hours
+  and weekends are safe — the latest close is simply re-reported (TASE
+  trades Mon–Fri as of 2026, so no special calendar handling exists).
+- **`manual`** — for securities with no free source (e.g. Sano 813014,
+  Bio-Dvash 1082346). Enter price points by hand, in ILS:
+
+  ```
+  python -m desk.manual_price <sec_id> <YYYY-MM-DD> <close>
+  ```
+
+  Re-entering the same date updates the close. The collector takes the
+  latest entry as the last price (`as_of` = its date, day change always
+  NULL) and computes each period return from the nearest entry
+  on-or-before that period's anchor date.
+
+Status semantics (`quotes.status`): `ok` = priced this run; `no_data` =
+nothing available yet (junk is never written); `stale` = the fetch failed
+but an older good row was kept. A NULL period return with `status='ok'`
+means history doesn't reach that far back (e.g. a recent IPO — the row
+covers returns only *since its first trading date*, which the collector
+logs); for manual securities it means no entry predates that anchor.
 
 ## Environment / secrets
 

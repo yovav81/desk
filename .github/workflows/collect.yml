@@ -39,3 +39,6 @@ jobs:
 
       - name: Collect email
         run: python -m desk.collect_email
+
+      - name: Collect prices
+        run: python -m desk.collect_prices

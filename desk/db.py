@@ -8,7 +8,9 @@ import os
 
 from sqlalchemy import (
     Column,
+    Date,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -19,6 +21,8 @@ from sqlalchemy import (
     UniqueConstraint,
     create_engine,
     func,
+    inspect,
+    text,
 )
 
 metadata = MetaData()
@@ -39,7 +43,8 @@ securities = Table(
     Column("name", String(255), nullable=False),
     Column("asset_type", String(16), nullable=False),  # stock | bond
     Column("market", String(16), nullable=False),  # US | TASE
-    Column("price_source", String(16), nullable=False, server_default="yfinance"),
+    Column("price_source", String(16), nullable=False, server_default="yfinance"),  # yfinance | manual
+    Column("yahoo_symbol", String(32), nullable=True),  # override; default resolution in securities.py
 )
 
 watchlist = Table(
@@ -81,6 +86,34 @@ emails = Table(
 )
 Index("ix_emails_received_at", emails.c.received_at)
 
+quotes = Table(
+    "quotes",
+    metadata,
+    Column("sec_id", String(32), ForeignKey("securities.sec_id"), primary_key=True),
+    Column("last_price", Float, nullable=True),
+    Column("prev_close", Float, nullable=True),
+    Column("day_change_pct", Float, nullable=True),
+    Column("mtd_pct", Float, nullable=True),
+    Column("qtd_pct", Float, nullable=True),
+    Column("ytd_pct", Float, nullable=True),
+    Column("y12_pct", Float, nullable=True),
+    Column("currency", String(8), nullable=True),  # always post-conversion (ILS, never ILA)
+    Column("as_of", DateTime(timezone=True), nullable=True),  # date of last_price
+    Column("anchors_date", Date, nullable=True),  # calendar day the period anchors were last computed
+    Column("source", String(16), nullable=False),  # yfinance | manual
+    Column("status", String(16), nullable=False),  # ok | no_data | stale
+)
+
+manual_prices = Table(
+    "manual_prices",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("sec_id", String(32), ForeignKey("securities.sec_id"), nullable=False),
+    Column("price_date", Date, nullable=False),
+    Column("close", Float, nullable=False),
+    UniqueConstraint("sec_id", "price_date", name="uq_manual_prices_sec_date"),
+)
+
 
 def get_engine(db_url: str | None = None):
     url = db_url or os.environ.get("DESK_DB_URL", "sqlite:///desk.db")
@@ -98,9 +131,34 @@ def insert_ignore(engine, table: Table, index_elements: list[str]):
     return sqlite_insert(table).on_conflict_do_nothing(index_elements=index_elements)
 
 
+def upsert(engine, table: Table, index_elements: list[str], values: dict):
+    """Return an INSERT ... ON CONFLICT DO UPDATE construct for the engine's dialect.
+
+    Updates every column present in `values` except the conflict keys.
+    """
+    if engine.dialect.name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert as dialect_insert
+    else:
+        from sqlalchemy.dialects.sqlite import insert as dialect_insert
+    stmt = dialect_insert(table).values(**values)
+    set_ = {k: stmt.excluded[k] for k in values if k not in index_elements}
+    return stmt.on_conflict_do_update(index_elements=index_elements, set_=set_)
+
+
+def _migrate(engine) -> None:
+    """Idempotent additive migrations for DBs created before newer columns existed."""
+    insp = inspect(engine)
+    if "securities" in insp.get_table_names():
+        cols = {c["name"] for c in insp.get_columns("securities")}
+        if "yahoo_symbol" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE securities ADD COLUMN yahoo_symbol VARCHAR(32)"))
+
+
 def init_db(engine=None) -> None:
     """Create all tables if they don't exist, and seed the default user."""
     engine = engine or get_engine()
+    _migrate(engine)
     metadata.create_all(engine, checkfirst=True)
     default_user = os.environ.get("DESK_DEFAULT_USER", "owner")
     with engine.begin() as conn:

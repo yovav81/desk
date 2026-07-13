@@ -1,4 +1,8 @@
-sec_id,symbol,name,asset_type,market,price_source
-AAPL,AAPL,Apple Inc,stock,US,yfinance
-MSFT,MSFT,Microsoft Corp,stock,US,yfinance
-629014,TEVA.TA,Teva Pharmaceutical Industries,stock,TASE,yfinance
+sec_id,symbol,name,asset_type,market,price_source,yahoo_symbol
+AAPL,AAPL,Apple Inc,stock,US,yfinance,
+MSFT,MSFT,Microsoft Corp,stock,US,yfinance,
+629014,TEVA,Teva Pharmaceutical Industries,stock,TASE,yfinance,
+813014,SANO,Sano,stock,TASE,manual,
+1082346,BDVSH,Bio Dvash,stock,TASE,manual,
+1242882,BGRA,Bagira,stock,TASE,yfinance,
+822015,DANH,Dan Hotels,stock,TASE,yfinance,

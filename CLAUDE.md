@@ -6,9 +6,10 @@ Filings (SEC/MAYA/MAGNA) arrive later via a read-only link to an existing
 system — always out of scope for this project.
 
 Will eventually be a hosted, multi-user service (employees, mobile-friendly).
-Phase 0 = data source investigation (`research/FINDINGS.md`). Phase 1 (current)
-= data foundation: DB schema, securities mapping, collectors — no UI, no
-price math. Phase 2 = pricing + hosted Streamlit dashboard. See `TODO.md`.
+Phase 0 = data source investigation (`research/FINDINGS.md`). Phase 1 =
+data foundation: DB schema, securities mapping, news/email collectors.
+Phase 2a = two-tier price collector (done). Next: 2b MAYA filings collector,
+2c React UI. See `TODO.md`.
 
 ## Folder isolation
 
@@ -26,11 +27,22 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   raw `.insert()` for any table with a UNIQUE constraint.
 - `desk/securities.py` — loads `data/securities.csv`, lookup only. Does not
   touch prices.
-- `desk/collect_news.py`, `desk/collect_email.py` — **cloud collectors,
-  WRITE-only** against `DESK_DB_URL`. Meant to run unattended on a schedule
-  (`.github/workflows/collect.yml`, every 15 min). The eventual dashboard is
-  **READ-only** against the same DB — never merge write/collection logic
-  into dashboard code.
+- `desk/collect_news.py`, `desk/collect_email.py`, `desk/collect_prices.py`
+  — **cloud collectors, WRITE-only** against `DESK_DB_URL`. Meant to run
+  unattended on a schedule (`.github/workflows/collect.yml`, every 15 min).
+  The eventual dashboard is **READ-only** against the same DB — never merge
+  write/collection logic into dashboard code.
+- **Two-tier pricing** (`securities.price_source`): `yfinance` securities
+  are batch-fetched by `collect_prices.py` (last price, day change,
+  MTD/QTD/YTD/12M; period anchors recomputed once per calendar day via
+  `quotes.anchors_date`); `manual` securities (no free source, e.g. Sano
+  813014, Bio-Dvash 1082346) get prices entered by hand:
+  `python -m desk.manual_price <sec_id> <YYYY-MM-DD> <close>` (ILS, not
+  agorot; same-date re-entry updates the close). Both tiers upsert one
+  `quotes` row per security via `db.upsert()`. Empty/all-NaN yfinance
+  history never overwrites good data (`status` = `no_data`/`stale`).
+- Yahoo symbol resolution: `securities.yahoo_symbol` override, else
+  `symbol` + `.TA` for `market=TASE` (`securities.resolve_yahoo_symbol`).
 - `data/securities.csv` — the security-number/symbol/name/type/market
   mapping. TASE has no scriptable export (WAF-blocked, see Phase 0
   findings); seeded via manual browser export or (future) TASE DataHub's
@@ -50,8 +62,10 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
 ## Known pitfalls
 
 - **yfinance `.TA` tickers report price in ILA (agorot), not ILS** — divide
-  by 100. Not yet handled anywhere in Phase 1 code (lookup/collection only);
-  must land wherever Phase 2 computes prices.
+  by 100. Handled in `desk/collect_prices.py` (stored prices are ILS;
+  `quotes.currency` is always post-conversion, never `ILA`). Percent
+  returns are scale-invariant, so only price levels need converting. Any
+  future code touching raw yfinance `.TA` prices must apply the same rule.
 - TASE bonds have no free API source (Yahoo doesn't carry them; TASE's own
   endpoints are WAF-blocked; DataHub's EOD bond product is paid, ~$100/mo).
   Still an open decision — see `TODO.md`.
