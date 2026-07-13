@@ -27,6 +27,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Install Chromium (for MAYA cookie harvest)
+        run: python -m playwright install --with-deps chromium
+
       - name: Require DESK_DB_URL
         run: |
           if [ -z "$DESK_DB_URL" ]; then
@@ -42,3 +45,7 @@ jobs:
 
       - name: Collect prices
         run: python -m desk.collect_prices
+
+      # One cookie harvest per run; fail-soft if the Imperva gate blocks this IP.
+      - name: Collect MAYA filings
+        run: python -m desk.collect_maya

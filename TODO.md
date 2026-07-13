@@ -45,8 +45,25 @@
       Dan Hotels 822015 (yfinance) on owner's watchlist
 - [x] collect.yml: prices step added after news/email
 
-## Phase 2b: MAYA filings collector (next)
-- [ ] Scope + build MAYA filings collector
+## Phase 2b: MAYA filings collector — DONE (2026-07-13)
+- [x] Pre-check (research/MAYA_FINDINGS.md) + Actions harvest probe PASSed —
+      MAYA runs in the cloud like the other collectors (probe now deleted)
+- [x] Schema: `securities.maya_company_id` (idempotent ALTER) + `filings`
+      table (UNIQUE(source, maya_id) dedup guard, published_at index) — desk/db.py
+- [x] desk/maya_client.py — shared harvest (headless Chromium, he-IL, automation
+      masked), gate-cleared check, requests.Session builder, doc-url helper
+- [x] desk/maya_ids.py — 2-hop companyId resolution (number→name→autocomplete
+      key; NOT the drop-3-digits shortcut) cached on securities; CLI
+      `python -m desk.maya_ids`. Verified live: 629/813/2093/2547/822, re-run
+      resolves 0
+- [x] desk/collect_maya.py — one harvest/run → per-company POST feed → filings
+      INSERT ON CONFLICT DO NOTHING. Fail-soft: gate-not-cleared or bad JSON
+      exits 0, never crashes. Verified live: 100 filings inserted with
+      mayafiles doc_urls, re-run inserted 0 (dedup)
+- [x] collect.yml: Chromium install + maya step after prices; requirements.txt
+      gains playwright
+
+## Phase 2c: React UI
 
 ## Phase 2c: React UI
 - [ ] Hosted, multi-user, mobile-friendly React dashboard, READ-only against

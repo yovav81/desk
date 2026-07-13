@@ -46,6 +46,7 @@ securities = Table(
     Column("market", String(16), nullable=False),  # US | TASE
     Column("price_source", String(16), nullable=False, server_default="yfinance"),  # yfinance | manual
     Column("yahoo_symbol", String(32), nullable=True),  # override; default resolution in securities.py
+    Column("maya_company_id", Integer, nullable=True),  # MAYA internal companyId; resolved+cached by desk/maya_ids.py
 )
 
 watchlist = Table(
@@ -115,6 +116,21 @@ manual_prices = Table(
     UniqueConstraint("sec_id", "price_date", name="uq_manual_prices_sec_date"),
 )
 
+filings = Table(
+    "filings",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("sec_id", String(32), ForeignKey("securities.sec_id"), nullable=True),
+    Column("source", String(16), nullable=False),  # maya
+    Column("maya_id", Integer, nullable=False),  # MAYA announcement id — dedup key
+    Column("title", Text, nullable=False),
+    Column("published_at", DateTime(timezone=True), nullable=True),
+    Column("doc_url", Text, nullable=True),
+    Column("fetched_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+    UniqueConstraint("source", "maya_id", name="uq_filings_source_maya_id"),  # dedup guard — sacred, like news.url
+)
+Index("ix_filings_published_at", filings.c.published_at)
+
 
 def _needs_prepared_statements_disabled(url) -> bool:
     """True for Postgres behind a transaction pooler (pgbouncer), where
@@ -168,9 +184,11 @@ def _migrate(engine) -> None:
     insp = inspect(engine)
     if "securities" in insp.get_table_names():
         cols = {c["name"] for c in insp.get_columns("securities")}
-        if "yahoo_symbol" not in cols:
-            with engine.begin() as conn:
+        with engine.begin() as conn:
+            if "yahoo_symbol" not in cols:
                 conn.execute(text("ALTER TABLE securities ADD COLUMN yahoo_symbol VARCHAR(32)"))
+            if "maya_company_id" not in cols:
+                conn.execute(text("ALTER TABLE securities ADD COLUMN maya_company_id INTEGER"))
 
 
 def init_db(engine=None) -> None:

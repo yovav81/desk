@@ -27,11 +27,35 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   raw `.insert()` for any table with a UNIQUE constraint.
 - `desk/securities.py` — loads `data/securities.csv`, lookup only. Does not
   touch prices.
-- `desk/collect_news.py`, `desk/collect_email.py`, `desk/collect_prices.py`
-  — **cloud collectors, WRITE-only** against `DESK_DB_URL`. Meant to run
-  unattended on a schedule (`.github/workflows/collect.yml`, every 15 min).
-  The eventual dashboard is **READ-only** against the same DB — never merge
-  write/collection logic into dashboard code.
+- `desk/collect_news.py`, `desk/collect_email.py`, `desk/collect_prices.py`,
+  `desk/collect_maya.py` — **cloud collectors, WRITE-only** against
+  `DESK_DB_URL`. Meant to run unattended on a schedule
+  (`.github/workflows/collect.yml`, every 15 min). The eventual dashboard is
+  **READ-only** against the same DB — never merge write/collection logic
+  into dashboard code.
+- **MAYA filings** (`desk/collect_maya.py`, `desk/maya_ids.py`,
+  `desk/maya_client.py`) — company disclosure **announcements** (headline +
+  date + document link) for watchlisted TASE securities. The pattern was
+  **independently replicated** from a live browser session, documented in
+  `research/MAYA_FINDINGS.md` — it does **not** read or link to any other
+  project. MAYA has no login but sits behind an Imperva/Incapsula bot gate:
+  `maya_client.harvest_cookies()` clears it once per run in headless Chromium
+  (desktop UA, `he-IL`, automation flags masked), then the JSON API is hit
+  with a plain `requests.Session`. **GET trap:** never send
+  `Content-Type: application/json` on a GET (WAF 403); set it only on the POST
+  feed. Fail-soft everywhere: if the gate isn't cleared (no Incapsula cookie)
+  or a response shape changes, log and **exit 0** — never crash the workflow.
+  Docs resolve at `https://mayafiles.tase.co.il/` + attachment path; human
+  page at `maya.tase.co.il/reports/details/<id>`. **Poll gently** (public
+  regulatory feed): one harvest/run, small `limit`, spaced calls.
+- **MAYA companyId caching:** `securities.maya_company_id` is resolved once
+  per TASE security by `python -m desk.maya_ids` via a **2-hop** lookup
+  (security number → official name via `search/market`, name → companyId via
+  `companies/autocomplete` `key`). Do **not** use the "drop last 3 digits"
+  shortcut — it's wrong for small caps (Bio-Dvash 1082346 → 2093, not 1082).
+  `collect_maya.py` skips (never crashes on) securities with a NULL
+  `maya_company_id` and logs a hint to run `maya_ids`. Dedup guard:
+  `filings` UNIQUE(`source`, `maya_id`) — sacred, like `news.url`.
 - **Two-tier pricing** (`securities.price_source`): `yfinance` securities
   are batch-fetched by `collect_prices.py` (last price, day change,
   MTD/QTD/YTD/12M; period anchors recomputed once per calendar day via
@@ -50,14 +74,16 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
 
 ## Data model rules
 
-- `watchlist` is **per-user** (FK to `users`). `securities`, `news`, and
-  `emails` are **shared across all users** — collectors always operate on
-  the union of every user's watchlist, never a single user's.
-- This phase stores **raw data only**: no LLM calls, no summarization, no
-  scoring. `news.summary` stays NULL; nothing paraphrases article or email
-  content.
-- `news.url` and `emails.message_id` are UNIQUE — the dedup guards that
-  make collectors safe to re-run on a cron. Don't relax these constraints.
+- `watchlist` is **per-user** (FK to `users`). `securities`, `news`,
+  `emails`, and `filings` are **shared across all users** — collectors always
+  operate on the union of every user's watchlist, never a single user's.
+- Collectors store **raw data only**: no LLM calls, no summarization, no
+  scoring. `news.summary` stays NULL; nothing paraphrases article, email, or
+  filing content (MAYA stores headline + date + doc link only, no financial
+  field codes).
+- `news.url`, `emails.message_id`, and `filings`(`source`, `maya_id`) are
+  UNIQUE — the dedup guards that make collectors safe to re-run on a cron.
+  Don't relax these constraints.
 
 ## Known pitfalls
 
