@@ -28,7 +28,7 @@ function badgeFor(item) {
   }
 }
 
-export default function News({ watchSecIds = [], watchReady = true }) {
+export default function News({ watchSecIds = [], secLabels = {}, watchReady = true }) {
   const { items, status, error } = useNews();
   const [tab, setTab] = useState('all'); // default: הכל
 
@@ -106,13 +106,15 @@ export default function News({ watchSecIds = [], watchReady = true }) {
         )}
         {status === 'ready' &&
           (watchReady || tab === 'macro') &&
-          shown.map((item) => <FeedItem key={item.key} item={item} />)}
+          shown.map((item) => (
+            <FeedItem key={item.key} item={item} secLabel={item.sec_id ? secLabels[item.sec_id] : null} />
+          ))}
       </div>
     </div>
   );
 }
 
-function FeedItem({ item }) {
+function FeedItem({ item, secLabel }) {
   const b = badgeFor(item);
   const time = fmtRelative(item.ts);
   return (
@@ -127,6 +129,21 @@ function FeedItem({ item }) {
         {b.sub && (
           <span dir="auto" style={{ fontSize: 11.5, color: t.mut, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {b.sub}
+          </span>
+        )}
+        {secLabel && (
+          <span
+            dir="auto"
+            style={{
+              fontSize: 11,
+              fontWeight: 600,
+              color: t.txt,
+              border: `1px solid ${t.accDim}`,
+              borderRadius: 5,
+              padding: '1px 8px',
+            }}
+          >
+            {secLabel}
           </span>
         )}
         {time && <span style={{ fontSize: 11.5, color: t.mut }}>{time}</span>}

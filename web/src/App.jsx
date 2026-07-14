@@ -173,6 +173,9 @@ function Field({ label, ...props }) {
 function Dashboard({ session }) {
   const wl = useWatchlist();
   const watchSecIds = wl.rows.map((r) => r.sec_id);
+  // sec_id -> short label (symbol) for the news security tags. Every displayed
+  // feed item with a sec_id is a watchlist security, so this map covers them.
+  const secLabels = Object.fromEntries(wl.rows.map((r) => [r.sec_id, r.symbol || r.sec_id]));
 
   async function onLogout() {
     await supabase.auth.signOut();
@@ -229,7 +232,7 @@ function Dashboard({ session }) {
         </div>
         <div style={{ width: 1, background: t.bd, flexShrink: 0 }} />
         <div style={{ flex: 1, display: 'flex', minWidth: 0, minHeight: 0 }}>
-          <News watchSecIds={watchSecIds} watchReady={wl.status === 'ready'} />
+          <News watchSecIds={watchSecIds} secLabels={secLabels} watchReady={wl.status === 'ready'} />
         </div>
       </div>
     </div>
