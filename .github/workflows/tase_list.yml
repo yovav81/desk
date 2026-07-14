@@ -1,0 +1,38 @@
+name: tase-list
+
+# The searchable TASE securities catalogue changes slowly, so refresh it once a
+# day (NOT with the 15-min collectors). Browserless MAYA — no Chromium needed.
+on:
+  schedule:
+    - cron: "20 3 * * *" # daily, 03:20 UTC
+  workflow_dispatch: {}
+
+concurrency:
+  group: desk-tase-list
+  cancel-in-progress: false
+
+jobs:
+  tase-list:
+    runs-on: ubuntu-latest
+    env:
+      DESK_DB_URL: ${{ secrets.DESK_DB_URL }}
+      DESK_DEFAULT_USER: ${{ secrets.DESK_DEFAULT_USER }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Require DESK_DB_URL
+        run: |
+          if [ -z "$DESK_DB_URL" ]; then
+            echo "::error::DESK_DB_URL secret is not set — refusing to run against no persistent DB."
+            exit 1
+          fi
+
+      - name: Refresh tase_securities
+        run: python -m desk.collect_tase_list

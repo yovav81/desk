@@ -135,8 +135,20 @@
       (normalize_currency). Verified live (research/ONBOARDING_GLOBAL_VALIDATION.md):
       SAP.DE/7203.T/NESN.SW/ASML.AS resolve with correct currency, HSBA.L
       GBp→GBP, collisions surface multiple, US/TASE/Hebrew unchanged.
-- [ ] Step 4b — search + picker + add/remove security in the UI, over the
-      onboarding engine (suggest/resolve/add_to_db).
+- [x] Step 4b-1 — searchable tase_securities table — DONE (2026-07-14).
+      Browserless MAYA (plain GET, no Playwright, no Origin) enumerates
+      companies via autocomplete prefixes + watchlist coverage, resolves each
+      company's primary stock via companies/<id>/details, upserts into
+      `tase_securities` (security_number PK, Hebrew name, company_id, type,
+      is_primary_stock). desk/collect_tase_list.py + daily
+      .github/workflows/tase_list.yml. Verified: sample search
+      name ILIKE '%טבע%' → Teva; re-run idempotent. See
+      research/TASE_LIST_FINDINGS.md.
+- [ ] Step 4b-2 — Edge Function for Yahoo (global) + SEC (US) live search
+      (CORS proxy; browser can't call them directly).
+- [ ] Step 4b-3 — search + picker + add/remove security in the UI, over the
+      onboarding engine (suggest/resolve/add_to_db) + tase_securities for
+      instant Israeli search.
 - [ ] Security detail page.
 - [ ] Draggable panel divider + mobile tabs (polish).
 - [ ] Deploy (Vercel) — not yet.

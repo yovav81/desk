@@ -105,6 +105,18 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   Docs resolve at `https://mayafiles.tase.co.il/` + attachment path; human
   page at `maya.tase.co.il/reports/details/<id>`. **Poll gently** (public
   regulatory feed): one harvest/run, small `limit`, spaced calls.
+- **`tase_securities`** (`desk/collect_tase_list.py`, daily
+  `.github/workflows/tase_list.yml`) — a searchable catalogue of TASE stocks
+  (security_number PK, Hebrew name, company_id, type, is_primary_stock) that is
+  the **local source for instant Israeli search** in the UI (the UI queries this
+  table directly rather than hitting MAYA per keystroke). Populated
+  **browserlessly** — plain HTTPS GET, browser-like headers, **no `Origin`**
+  (foreign Origin → Imperva 403), **no Playwright** (search API GETs aren't
+  gated, per research/EDGE_SEARCH_FINDINGS.md). No one-shot dump exists, so it
+  enumerates companies via `companies/autocomplete` over curated Hebrew prefixes
+  (+ guaranteed watchlist coverage) then resolves each company's PRIMARY STOCK
+  via `companies/<id>/details.mainSecurityId`. Refreshed **daily** (changes
+  slowly); coverage is broad but grows over runs (see TASE_LIST_FINDINGS.md).
 - **MAYA companyId caching:** `securities.maya_company_id` is resolved once
   per TASE security by `python -m desk.maya_ids` via a **2-hop** lookup
   (security number → official name via `search/market`, name → companyId via

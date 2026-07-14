@@ -7,6 +7,7 @@ DESK_DB_URL selects the backend, e.g.:
 import os
 
 from sqlalchemy import (
+    Boolean,
     Column,
     Date,
     DateTime,
@@ -131,6 +132,23 @@ filings = Table(
     UniqueConstraint("source", "maya_id", name="uq_filings_source_maya_id"),  # dedup guard — sacred, like news.url
 )
 Index("ix_filings_published_at", filings.c.published_at)
+
+# Searchable TASE securities catalogue — the LOCAL source for instant Israeli
+# search in the UI (populated browserlessly from MAYA by collect_tase_list.py).
+# One row per company's PRIMARY STOCK; refreshed on a slow (daily) cadence.
+tase_securities = Table(
+    "tase_securities",
+    metadata,
+    Column("security_number", String(16), primary_key=True),  # TASE security number
+    Column("name", String(255), nullable=False),  # Hebrew company/security name
+    Column("symbol", String(32), nullable=True),  # Yahoo/ticker symbol if known (else NULL)
+    Column("company_id", Integer, nullable=True),  # MAYA companyId
+    Column("security_type", String(64), nullable=True),  # share/bond/etc. (MAYA securityType)
+    Column("is_primary_stock", Boolean, nullable=True),  # the company's ordinary share
+    Column("updated_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+)
+Index("ix_tase_securities_name", tase_securities.c.name)
+Index("ix_tase_securities_company_id", tase_securities.c.company_id)
 
 
 def _needs_prepared_statements_disabled(url) -> bool:
