@@ -118,10 +118,19 @@
 - [ ] **RLS note:** tables were created by the Python collectors (raw SQL), so
       the anon role may lack SELECT. If the table shows a permission/RLS
       error, grant read access (see CLAUDE.md / the error message).
-- [ ] Step 3 — news panel with the three filters (My stocks / Macro & reviews
-      / All).
-- [ ] Typeahead + add-security flow over the onboarding engine (2c-1).
+- [x] Step 3 — unified news/email/filings panel — DONE (2026-07-14).
+      Left panel: web/src/useNews.js fetches news+emails+filings once;
+      web/src/News.jsx merges FOUR source types (web news, email, MAYA, SEC)
+      into one time-sorted feed with source-type badges (outlet/מייל/מאיה/SEC)
+      and three tabs — המניות שלי / מאקרו וסקירות / הכל (default הכל). Two-panel
+      layout (watchlist right, news left). Verified rendering + filtering +
+      tab switching against representative data.
+- [ ] **RLS for news/emails/filings:** verified these 3 tables return 0 rows
+      with no error via the anon key (RLS-without-policy). Add read policies
+      (see CLAUDE.md) so the feed populates; the fetch code is already correct.
+- [ ] Step 4 — search + add-security flow over the onboarding engine (2c-1).
 - [ ] Security detail page.
+- [ ] Draggable panel divider + mobile tabs (polish).
 - [ ] Deploy (Vercel) — not yet.
 
 ## Open items (carried over)

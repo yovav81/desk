@@ -43,16 +43,26 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   our own `users` table, not the Supabase Auth uid. The watchlist currently
   reads the seeded **"owner"** user (`OWNER_USERNAME` in `useWatchlist.js`) as a
   stand-in — a TODO to map properly so each user sees their own list.
-- **RLS/grants:** the collectors created these tables via raw SQL, so the
-  Supabase `anon` role may not have SELECT. If reads fail with a
-  permission/RLS error, either enable RLS with a read policy, e.g.
-  `alter table securities enable row level security; create policy anon_read on
-  securities for select to anon using (true);` (repeat for `quotes`,
-  `watchlist`, `users`), or grant read directly:
-  `grant select on securities, quotes, watchlist, users to anon;`.
-- Current state: **step 2** — login + the live watchlist table
-  (`web/src/Watchlist.jsx`). News panel, add/search, and detail page are later
-  steps.
+- **RLS is the gotcha for every table the UI reads.** The collectors created
+  these tables via raw SQL; the Supabase `anon` role reading them via PostgREST
+  is subject to RLS. **`GRANT SELECT` does NOT bypass RLS** — with RLS enabled
+  and no policy, reads return an **empty array with no error** (looks like "no
+  data" but is a permission block). Each UI-read table needs a read policy:
+  `create policy "anon read" on public.<table> for select to anon, authenticated using (true);`
+  Applied so far: `users`, `securities`, `quotes`, `watchlist`. **Still needed:
+  `news`, `emails`, `filings`** (verified they return 0 rows / no error).
+- **News feed = 4 source types, 3 filters** (`web/src/useNews.js`,
+  `web/src/News.jsx`): one time-sorted feed merging **web news** (`news`
+  category `stock`/`macro`), **email** (`emails`), **MAYA filing** (`filings`
+  source `maya`), **SEC filing** (`filings` source `sec`), each tagged with a
+  source-type badge (outlet name / מייל / מאיה / SEC). Tabs: **המניות שלי** =
+  all four types whose `sec_id` is in the user's watchlist; **מאקרו וסקירות** =
+  `news` category `macro` + emails with `sec_id IS NULL`; **הכל** = the union.
+- Data queries avoid PostgREST nested embeds (FK relationships aren't detected
+  on the raw-created tables — embeds return null joins); use flat `.in()`
+  queries merged in JS instead (see `useWatchlist.js`).
+- Current state: **step 3** — login + two-panel dashboard (watchlist right,
+  news feed left). Add/search and the detail page are later steps.
 
 ## Architecture
 

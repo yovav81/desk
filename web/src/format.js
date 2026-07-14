@@ -44,3 +44,30 @@ export function subLine(sec) {
   const kind = sec.asset_type === 'bond' ? 'אג"ח' : 'ת"א';
   return `${sec.sec_id} · ${kind}`;
 }
+
+// Hebrew relative timestamp for feed items. null -> '' (rendered as nothing).
+export function fmtRelative(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return '';
+  const now = new Date();
+  const diffMin = Math.floor((now - d) / 60000);
+  if (diffMin < 1) return 'עכשיו';
+  if (diffMin < 60) return `לפני ${diffMin} דק׳`;
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  if (d.toDateString() === now.toDateString()) {
+    return `לפני ${Math.floor(diffMin / 60)} שעות`;
+  }
+  const yest = new Date(now);
+  yest.setDate(now.getDate() - 1);
+  if (d.toDateString() === yest.toDateString()) return `אתמול ${hh}:${mm}`;
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  return `${dd}.${mo}.${d.getFullYear()}`;
+}
+
+export function tsValue(ts) {
+  const v = ts ? Date.parse(ts) : NaN;
+  return Number.isNaN(v) ? 0 : v; // nulls/invalid sort last
+}

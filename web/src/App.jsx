@@ -2,11 +2,13 @@ import { useEffect, useState } from 'react';
 import { supabase } from './supabaseClient';
 import { theme as t } from './theme';
 import Watchlist from './Watchlist';
+import News from './News';
+import { useWatchlist } from './useWatchlist';
 
-// STEP 2: login (step 1) + the live, READ-ONLY watchlist table reading from
-// Supabase. No add/remove/search/news/detail yet — those are later steps.
-// Styling mirrors design_reference/ (Ocean theme, gold accent) but is our own
-// clean implementation.
+// STEP 3: login + two-panel dashboard — watchlist table (right) and the
+// unified news/email/filings feed (left) with three filter tabs. All
+// READ-ONLY from Supabase. No add/search/detail yet. Styling mirrors
+// design_reference/ (Ocean theme, gold accent), our own clean implementation.
 
 export default function App() {
   const [session, setSession] = useState(null);
@@ -169,6 +171,9 @@ function Field({ label, ...props }) {
 }
 
 function Dashboard({ session }) {
+  const wl = useWatchlist();
+  const watchSecIds = wl.rows.map((r) => r.sec_id);
+
   async function onLogout() {
     await supabase.auth.signOut();
   }
@@ -217,9 +222,15 @@ function Dashboard({ session }) {
         </div>
       </div>
 
-      {/* content: watchlist only for now (news panel is a later step) */}
+      {/* content: watchlist (right, primary in RTL) + news feed (left) */}
       <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
-        <Watchlist />
+        <div style={{ width: '56%', display: 'flex', minWidth: 0, minHeight: 0 }}>
+          <Watchlist rows={wl.rows} status={wl.status} error={wl.error} />
+        </div>
+        <div style={{ width: 1, background: t.bd, flexShrink: 0 }} />
+        <div style={{ flex: 1, display: 'flex', minWidth: 0, minHeight: 0 }}>
+          <News watchSecIds={watchSecIds} watchReady={wl.status === 'ready'} />
+        </div>
       </div>
     </div>
   );

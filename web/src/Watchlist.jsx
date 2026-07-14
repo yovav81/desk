@@ -1,5 +1,4 @@
 import { theme as t } from './theme';
-import { useWatchlist } from './useWatchlist';
 import {
   ccySymbol,
   displayName,
@@ -9,8 +8,9 @@ import {
   subLine,
 } from './format';
 
-// Desktop watchlist table (right/primary panel in RTL). READ-ONLY for this
-// step — no add/remove/search/news/detail yet.
+// Desktop watchlist table (right/primary panel in RTL). READ-ONLY.
+// Data comes in as props so App can fetch the watchlist once and share the
+// sec_ids with the news panel.
 
 const RET_KEYS = [
   { key: 'mtd_pct', label: 'חודש' },
@@ -25,9 +25,7 @@ const GRID =
 
 const mono = "'IBM Plex Mono', monospace";
 
-export default function Watchlist() {
-  const { rows, status, error } = useWatchlist();
-
+export default function Watchlist({ rows = [], status = 'loading', error = '' }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
       <div style={{ padding: '18px 24px 12px', display: 'flex', alignItems: 'baseline', gap: 10 }}>
