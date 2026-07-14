@@ -113,10 +113,16 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   **browserlessly** — plain HTTPS GET, browser-like headers, **no `Origin`**
   (foreign Origin → Imperva 403), **no Playwright** (search API GETs aren't
   gated, per research/EDGE_SEARCH_FINDINGS.md). No one-shot dump exists, so it
-  enumerates companies via `companies/autocomplete` over curated Hebrew prefixes
-  (+ guaranteed watchlist coverage) then resolves each company's PRIMARY STOCK
-  via `companies/<id>/details.mainSecurityId`. Refreshed **daily** (changes
-  slowly); coverage is broad but grows over runs (see TASE_LIST_FINDINGS.md).
+  **sweeps the companyId range** (~100..2650), calling
+  `companies/<id>/details` for each → the company's PRIMARY STOCK
+  (`mainSecurityId`) + `securityType`; bond-only/deleted/no-stock are skipped
+  (~557 stocks, complete equity coverage). The stored `name` is the **full
+  registered name** (`longName`, e.g. `בנק לאומי לישראל בע"מ`) — it contains
+  both the brand and words like `בנק`, so searching either matches (the short
+  brand alone made banks unfindable by `בנק`). Refreshed **daily** (~10 min,
+  ~2,500 paced requests); **resumable** — company_ids refreshed within
+  `FRESH_HOURS` are skipped, so interrupted/same-day re-runs are cheap. Long
+  tail grows via onboarding + live MAYA search. See TASE_LIST_FINDINGS.md.
 - **MAYA companyId caching:** `securities.maya_company_id` is resolved once
   per TASE security by `python -m desk.maya_ids` via a **2-hop** lookup
   (security number → official name via `search/market`, name → companyId via

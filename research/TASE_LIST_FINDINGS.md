@@ -38,6 +38,27 @@ yields companyId+name, and the **security number = `mainSecurityId`** still
 comes from one `companies/<id>/details` call per company (same call the
 onboarding engine already uses in `resolve_company_to_primary_stock`).
 
+## UPDATE (4b-1b): switched to the companyId sweep
+
+The prefix method (below) was too thin — it capped at 50/prefix and missed most
+companies (e.g. `בנק` found only 1 bank). **`collect_tase_list.py` now uses the
+companyId sweep** (range ~100..2650, one `details` call each): **complete**
+primary-stock coverage, **557 TASE stocks** (vs 439 from prefixes). Two fixes
+made it work:
+- **Store the full `longName`** (`בנק לאומי לישראל בע"מ`), not the short brand
+  (`לאומי`) — the short name has no `בנק`, so banks were unsearchable. The full
+  name contains both the brand and `בנק`, so either matches. `בנק` now returns
+  Leumi/Poalim/Discount/Mizrahi/Jerusalem/First-International (7).
+- **Resumable + paced:** skip company_ids refreshed within `FRESH_HOURS` (so
+  interrupted/same-day re-runs are cheap; a daily run refreshes all), retry once
+  on transient errors, progress log every 100. ~2,500 requests, ~10 min daily.
+
+(The real TASE equity universe is ~557 issuers with a primary ordinary share;
+that is the complete count for the swept range, not a shortfall. Bonds/secondary
+series aren't indexed here — they onboard by exact security number.)
+
+The prefix method below is superseded (kept for reference).
+
 ## Chosen method (gentle + grows over time)
 
 **Autocomplete prefix enumeration → per-company `details` → upsert**, because

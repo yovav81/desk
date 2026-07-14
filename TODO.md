@@ -144,6 +144,14 @@
       .github/workflows/tase_list.yml. Verified: sample search
       name ILIKE '%טבע%' → Teva; re-run idempotent. See
       research/TASE_LIST_FINDINGS.md.
+- [x] Step 4b-1b — widen coverage via companyId sweep — DONE (2026-07-14).
+      Replaced prefix-autocomplete (capped 50/prefix) with a full companyId
+      sweep (range ~100..2650) — COMPLETE primary-stock coverage: 557 TASE
+      companies (up from 439). Resumable (skip company_ids fresh <20h),
+      retry on transient errors, progress logging every 100. Store the full
+      registered name (`longName`, e.g. "בנק לאומי לישראל בע\"מ") so "בנק"
+      search now returns the major banks (was only 1). Daily workflow retained
+      (sweep ~10 min).
 - [ ] Step 4b-2 — Edge Function for Yahoo (global) + SEC (US) live search
       (CORS proxy; browser can't call them directly).
 - [ ] Step 4b-3 — search + picker + add/remove security in the UI, over the
