@@ -148,6 +148,24 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   no stock (bond-only issuer) is surfaced as NOT-RESOLVABLE-BY-NAME with a
   hint to enter a number — never a guessed series (see
   research/COMPANY_PRIMARY_FINDINGS.md).
+- **GLOBAL equities** (`market='GLOBAL'`): a third resolver via **Yahoo's
+  public search** (`query1.finance.yahoo.com/v1/finance/search`), filtered to
+  `quoteType=='EQUITY'`. Yahoo search is **not** a safe auto-resolver —
+  same-ticker collisions return valid-but-wrong companies with clean prices
+  (RS=Reliance Steel vs RELIANCE.NS; SAP.TO=Saputo vs SAP.DE), which the NaN
+  guard can't catch — so global is **resolve-assisted**: `suggest()` surfaces
+  candidates, the user picks the exact Yahoo symbol, `resolve('GLOBAL', sym)`
+  validates it. **Never auto-pick.** Query routing: **Hebrew or a bare 6-9
+  digit number → MAYA** (Yahoo 400s on Hebrew); plain Latin ticker/name →
+  **US (SEC) + Yahoo global merged**, de-duped by bare symbol (US wins its
+  GLOBAL twin). See research/GLOBAL_COVERAGE_FINDINGS.md +
+  ONBOARDING_GLOBAL_VALIDATION.md.
+- **Sub-unit currency ÷100** lives in one place, `collect_prices.normalize_currency()`:
+  `ILA→ILS`, `GBp→GBP`, `GBX→GBP` (agorot/pence), everything else unscaled.
+  `currency_for()` round-trips the stored major currency back to the native
+  sub-unit by suffix (`.TA`→ILA, `.L`→GBp) so re-runs keep converting.
+  Onboarding only records the display currency; the actual ÷100 is the
+  collector's job (never double-handled).
 - `data/securities.csv` — the security-number/symbol/name/type/market
   mapping. TASE has no scriptable export (WAF-blocked, see Phase 0
   findings); seeded via manual browser export or (future) TASE DataHub's

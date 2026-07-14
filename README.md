@@ -109,8 +109,12 @@ MTD/QTD/YTD/12M returns. `securities.price_source` picks the tier:
 
 - **`yfinance` (auto)** — batch daily history from Yahoo. The yfinance
   ticker is `securities.yahoo_symbol` when set, otherwise the symbol
-  (+`.TA` for `market=TASE`). **`.TA` prices arrive in ILA (agorot) and are
-  stored ÷100 as ILS** — `quotes.currency` is always post-conversion.
+  (+`.TA` for `market=TASE`). **Sub-unit currencies are stored ÷100 in their
+  major unit:** TASE `.TA` quotes in ILA (agorot) → ILS, and LSE `.L` quotes
+  in `GBp` (pence) → GBP. `normalize_currency()` is the single place this
+  happens; `quotes.currency` is always the post-conversion major currency (so
+  a `GBp` stock reads e.g. 14.62 GBP, not 1462). Non-sub-unit currencies
+  (USD, EUR, JPY, CHF, …) pass through unscaled.
   Period anchors (close before month/quarter/year start, and ~12 months
   ago) are recomputed once per calendar day (`quotes.anchors_date`);
   in-between runs only refresh the last price and day change. Off-hours

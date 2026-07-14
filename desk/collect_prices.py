@@ -110,21 +110,50 @@ def closes_series(df: pd.DataFrame | None, symbol: str) -> tuple[list[date], lis
     return dates, [float(v) for v in series.to_list()]
 
 
+# Sub-unit currencies Yahoo quotes in 1/100 of the major unit: agorot (ILA) on
+# TASE, pence (GBp/GBX) on the LSE. This is the ONE place the ÷100 happens — a
+# native sub-unit price is divided by 100 and stored in the major currency, so
+# stored quotes are always in the major unit (never agorot/pence).
+SUBUNIT_CURRENCY = {
+    "ILA": ("ILS", 0.01),  # TASE agorot
+    "GBp": ("GBP", 0.01),  # LSE pence (Yahoo lower-case p)
+    "GBX": ("GBP", 0.01),  # LSE pence (alt code)
+}
+
+
+def normalize_currency(native: str | None) -> tuple[str, float]:
+    """(display_currency, price_scale) for a Yahoo-reported currency. Sub-unit
+    currencies (agorot, pence) map to their major unit at 0.01; everything else
+    passes through unscaled. None -> ('USD', 1.0)."""
+    if not native:
+        return ("USD", 1.0)
+    return SUBUNIT_CURRENCY.get(native, (native, 1.0))
+
+
 def currency_for(symbol: str, cached: str | None) -> str:
     """Native quote currency from Yahoo, cached via quotes.currency.
 
-    The stored value is always post-conversion ('ILS'), which maps back to
-    native 'ILA' for .TA symbols so the /100 rule keeps applying.
+    The stored value is the major (post-conversion) currency, so this maps it
+    back to the native sub-unit by suffix — 'ILS'->'ILA' for .TA (agorot),
+    'GBP'->'GBp' for .L (pence) — so the ÷100 rule keeps applying on re-runs.
     """
     if cached:
-        return "ILA" if cached == "ILS" and symbol.endswith(".TA") else cached
+        if cached == "ILS" and symbol.endswith(".TA"):
+            return "ILA"
+        if cached == "GBP" and symbol.endswith(".L"):
+            return "GBp"
+        return cached
     try:
         cur = yf.Ticker(symbol).fast_info["currency"]
         if cur:
             return cur
     except Exception as e:
         log.warning("currency lookup failed for %s (%s); falling back on suffix", symbol, e)
-    return "ILA" if symbol.endswith(".TA") else "USD"
+    if symbol.endswith(".TA"):
+        return "ILA"
+    if symbol.endswith(".L"):
+        return "GBp"
+    return "USD"
 
 
 def collect_auto(engine, secs: list[dict], existing: dict[str, dict], today: date) -> None:
@@ -164,8 +193,8 @@ def collect_auto(engine, secs: list[dict], existing: dict[str, dict], today: dat
             log.warning("%s (%s): no usable history -> %s", sec_id, symbol, values["status"])
         else:
             dates, closes = data
-            currency = currency_for(symbol, prior["currency"] if prior else None)
-            scale = 0.01 if currency == "ILA" else 1.0  # ILA (agorot) -> ILS
+            native_ccy = currency_for(symbol, prior["currency"] if prior else None)
+            display_ccy, scale = normalize_currency(native_ccy)  # agorot/pence -> major unit ÷100
             last, last_date = closes[-1], dates[-1]
             prev = closes[-2] if len(closes) > 1 else None
             values = {
@@ -173,7 +202,7 @@ def collect_auto(engine, secs: list[dict], existing: dict[str, dict], today: dat
                 "last_price": last * scale,
                 "prev_close": prev * scale if prev is not None else None,
                 "day_change_pct": pct_change(last, prev),
-                "currency": "ILS" if currency == "ILA" else currency,
+                "currency": display_ccy,
                 "as_of": datetime.combine(last_date, time.min, tzinfo=timezone.utc),
                 "source": "yfinance",
                 "status": "ok",

@@ -128,7 +128,15 @@
 - [ ] **RLS for news/emails/filings:** verified these 3 tables return 0 rows
       with no error via the anon key (RLS-without-policy). Add read policies
       (see CLAUDE.md) so the feed populates; the fetch code is already correct.
-- [ ] Step 4 — search + add-security flow over the onboarding engine (2c-1).
+- [x] Step 4a — GLOBAL onboarding resolver — DONE (2026-07-14). Yahoo-search
+      resolve-assisted global equities (EQUITY-filtered, never auto-pick,
+      collision-safe); Hebrew/number → MAYA, Latin → SEC+Yahoo merged. GBp
+      (London pence) ÷100 handled in collect_prices alongside ILA agorot
+      (normalize_currency). Verified live (research/ONBOARDING_GLOBAL_VALIDATION.md):
+      SAP.DE/7203.T/NESN.SW/ASML.AS resolve with correct currency, HSBA.L
+      GBp→GBP, collisions surface multiple, US/TASE/Hebrew unchanged.
+- [ ] Step 4b — search + picker + add/remove security in the UI, over the
+      onboarding engine (suggest/resolve/add_to_db).
 - [ ] Security detail page.
 - [ ] Draggable panel divider + mobile tabs (polish).
 - [ ] Deploy (Vercel) — not yet.
