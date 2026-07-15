@@ -20,12 +20,21 @@ Manual tier (securities.price_source == 'manual'):
     period returns use the nearest entry on-or-before each anchor date
     (NULL when no entry predates the anchor).
 
+Price history (both tiers):
+  - The daily anchor refresh already pulls ~400 days; the last ~1 year of that
+    SAME frame is upserted into `price_history` (no extra yfinance calls) for
+    the detail-page chart. Manual securities mirror their manual_prices points.
+  - Stored closes are NORMALIZED (post ÷100 for agorot/pence) — identical to
+    what the watchlist shows. Never raw sub-units.
+  - Retention ~13 months; older rows are pruned each run.
+
 Off-hours/weekends are safe: the last daily close is simply re-reported.
 TASE trades Mon-Fri as of 2026, so no special calendar gating is needed.
 
 Raw prices only — no LLM calls, no scoring. WRITE-only against DESK_DB_URL.
 """
 import logging
+import math
 from bisect import bisect_right
 from datetime import date, datetime, time, timedelta, timezone
 
@@ -33,7 +42,17 @@ import pandas as pd
 import yfinance as yf
 from sqlalchemy import select
 
-from desk.db import get_engine, init_db, manual_prices, quotes, securities, upsert, watchlist
+from desk.db import (
+    get_engine,
+    init_db,
+    manual_prices,
+    price_history,
+    quotes,
+    securities,
+    upsert,
+    upsert_many,
+    watchlist,
+)
 from desk.securities import resolve_yahoo_symbol
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -42,6 +61,11 @@ log = logging.getLogger("collect_prices")
 PERIOD_COLS = ["mtd_pct", "qtd_pct", "ytd_pct", "y12_pct"]
 # 12m anchor + nearest prior trading day + holidays: 400 calendar days is plenty.
 HISTORY_DAYS = 400
+# How much of the fetched series to persist for the chart (~1 year of closes).
+CHART_DAYS = 365
+# Retention: ~13 months, a little slack past CHART_DAYS so a 12-month chart
+# never runs short at the left edge. Older rows are pruned each run.
+RETENTION_DAYS = 400
 
 
 def watchlisted_securities(engine) -> list[dict]:
@@ -156,6 +180,40 @@ def currency_for(symbol: str, cached: str | None) -> str:
     return "USD"
 
 
+def persist_history(engine, sec_id: str, dates: list[date], closes: list[float], scale: float, today: date) -> int:
+    """Upsert the last ~CHART_DAYS of NORMALIZED daily closes. Returns rows written.
+
+    `scale` is the SAME factor already applied to quotes.last_price for this
+    security (1.0, or 0.01 for agorot/pence), so the stored close always matches
+    the watchlist number — the ÷100 is never repeated or skipped here.
+
+    ON CONFLICT DO UPDATE, so re-runs are idempotent and a later Yahoo
+    correction/adjustment to a past close overwrites the old value.
+    """
+    cutoff = today - timedelta(days=CHART_DAYS)
+    rows = [
+        {"sec_id": sec_id, "price_date": d, "close": c * scale}
+        for d, c in zip(dates, closes)
+        # closes_series already dropped NaNs; belt-and-braces, since a NaN here
+        # would poison the chart with a non-price.
+        if d >= cutoff and c is not None and not math.isnan(c)
+    ]
+    if not rows:
+        return 0
+    with engine.begin() as conn:
+        conn.execute(upsert_many(engine, price_history, ["sec_id", "price_date"], rows), rows)
+    return len(rows)
+
+
+def prune_history(engine, today: date) -> int:
+    """Drop closes older than the retention window. Keeps the table bounded —
+    it grows by ~250 rows per security per year otherwise."""
+    cutoff = today - timedelta(days=RETENTION_DAYS)
+    with engine.begin() as conn:
+        result = conn.execute(price_history.delete().where(price_history.c.price_date < cutoff))
+    return result.rowcount or 0
+
+
 def collect_auto(engine, secs: list[dict], existing: dict[str, dict], today: date) -> None:
     if not secs:
         return
@@ -180,6 +238,7 @@ def collect_auto(engine, secs: list[dict], existing: dict[str, dict], today: dat
         log.error("batch download failed: %s", e)
         df = None
 
+    history_rows = 0
     for sec in secs:
         sec_id, symbol = sec["sec_id"], symbols[sec["sec_id"]]
         prior = existing.get(sec_id)
@@ -214,13 +273,24 @@ def collect_auto(engine, secs: list[dict], existing: dict[str, dict], today: dat
                 missing = [c for c, v in returns.items() if v is None]
                 if missing:
                     log.info("%s (%s): history since %s -> %s = NULL", sec_id, symbol, dates[0], ",".join(missing))
+            # Only on the daily anchor refresh: that's the run holding the full
+            # ~400d frame. The short (12d) intra-day runs would just rewrite the
+            # same recent closes for no gain.
+            if need_anchors:
+                n = persist_history(engine, sec_id, dates, closes, scale, today)
+                history_rows += n
+                log.info("%s (%s): %d history closes persisted", sec_id, symbol, n)
             log.info("%s (%s): last=%.2f %s as_of=%s", sec_id, symbol, values["last_price"], values["currency"], last_date)
 
         with engine.begin() as conn:
             conn.execute(upsert(engine, quotes, ["sec_id"], values))
 
+    if history_rows:
+        log.info("auto tier: %d history rows written", history_rows)
+
 
 def collect_manual(engine, secs: list[dict], today: date) -> None:
+    history_rows = 0
     for sec in secs:
         sec_id = sec["sec_id"]
         stmt = (
@@ -249,9 +319,21 @@ def collect_manual(engine, secs: list[dict], today: date) -> None:
                 "status": "ok",
                 **period_returns(dates, closes, last, today),
             }
-            log.info("%s (%s): last=%.2f %s as_of=%s (manual)", sec_id, sec["symbol"], last, values["currency"], last_date)
+            # Mirror the entered points as-is. manual_price CLI takes ILS (not
+            # agorot), so scale is 1.0 — no conversion, and nothing is invented
+            # or interpolated between points. The series is sparse by nature;
+            # the chart shows exactly the points that exist.
+            n = persist_history(engine, sec_id, dates, closes, 1.0, today)
+            history_rows += n
+            log.info(
+                "%s (%s): last=%.2f %s as_of=%s (manual, %d history points)",
+                sec_id, sec["symbol"], last, values["currency"], last_date, n,
+            )
         with engine.begin() as conn:
             conn.execute(upsert(engine, quotes, ["sec_id"], values))
+
+    if history_rows:
+        log.info("manual tier: %d history rows written", history_rows)
 
 
 def collect() -> None:
@@ -266,7 +348,11 @@ def collect() -> None:
     today = datetime.now(timezone.utc).date()
     collect_auto(engine, auto, existing_quotes(engine), today)
     collect_manual(engine, manual, today)
-    log.info("done: auto=%d manual=%d skipped=%d", len(auto), len(manual), len(other))
+    pruned = prune_history(engine, today)
+    log.info(
+        "done: auto=%d manual=%d skipped=%d history_pruned=%d",
+        len(auto), len(manual), len(other), pruned,
+    )
 
 
 if __name__ == "__main__":

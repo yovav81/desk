@@ -210,7 +210,34 @@
             **Fix properly by adding an enrichment step to collect.yml**
             (maya_ids + an onboarding pass over unenriched securities) — the
             collectors were out of scope for this step.
-- [ ] Step 5 — security detail page.
+- [x] Step 5a — persist daily price history (backend) — DONE (2026-07-15).
+      Schema: `price_history` (sec_id FK + price_date composite PK, close;
+      ix_price_history_sec_date on (sec_id, price_date desc)) — new table, so
+      create_all(checkfirst=True) adds it with no ALTER. desk/db.py gains
+      `upsert_many()` (executemany ON CONFLICT DO UPDATE — the bulk sibling of
+      upsert(); ~250 rows/security/day would be ~250 round trips otherwise).
+      collect_prices persists the last ~1 year (CHART_DAYS=365) of closes from
+      the SAME ~400d frame it already pulls — **no extra yfinance calls** — on
+      the daily anchor refresh only (the 12d intra-day runs would rewrite the
+      same closes for nothing). Closes are NORMALIZED via the existing `scale`
+      from normalize_currency(), so the stored value equals quotes.last_price
+      exactly (one ÷100, never repeated). Manual tier mirrors manual_prices
+      points as-is (scale 1.0, sparse, nothing interpolated). Retention
+      RETENTION_DAYS=400 (~13mo), pruned each run; per-tier row counts logged.
+      Verified live on throwaway SQLite: TEVA 223 closes @ 53.74–113.50 **ILS**
+      (not agorot), HSBA.L 253 @ 9.18–14.90 **GBP** (not pence), AAPL 252 USD,
+      Sano exactly its 2 entered points; latest history close == quotes.last_price
+      for all three; prune removed a seeded 500-day-old row; re-run with anchors
+      forced stale re-wrote 728 rows with **0 duplicates** and corrected TEVA
+      95.15→95.03 (upsert, not insert).
+      - [ ] **Not yet run against the live DB** — needs `python -m desk.collect_prices`
+            with $env:DESK_DB_URL set (user).
+      - [ ] **RLS:** `price_history` will need a read policy before 5b can chart
+            it (`create policy "anon read" on public.price_history for select to
+            anon, authenticated using (true);`) — same silent-empty trap as the
+            other UI-read tables.
+- [ ] Step 5b — security detail page + chart (month/quarter/year selector) over
+      price_history.
 - [ ] Draggable panel divider + mobile tabs (polish).
 - [ ] Deploy (Vercel) — not yet.
 

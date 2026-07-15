@@ -118,6 +118,24 @@ manual_prices = Table(
     UniqueConstraint("sec_id", "price_date", name="uq_manual_prices_sec_date"),
 )
 
+# Daily close series behind the detail-page chart. Written by collect_prices
+# from the SAME yfinance frame it already pulls for the period anchors — this
+# table costs no extra network calls.
+#
+# `close` is the NORMALIZED major-currency close (post ILA->ILS / GBp->GBP
+# division), i.e. exactly the number the watchlist shows. Raw sub-units
+# (agorot/pence) are NEVER stored — the ÷100 has one home,
+# collect_prices.normalize_currency(), and this table is downstream of it.
+price_history = Table(
+    "price_history",
+    metadata,
+    Column("sec_id", String(32), ForeignKey("securities.sec_id"), primary_key=True),
+    Column("price_date", Date, primary_key=True),
+    Column("close", Float, nullable=False),  # major currency (ILS never ILA, GBP never GBp)
+)
+# Chart queries are "latest N days for one security" — matches this index.
+Index("ix_price_history_sec_date", price_history.c.sec_id, price_history.c.price_date.desc())
+
 filings = Table(
     "filings",
     metadata,
@@ -195,6 +213,26 @@ def upsert(engine, table: Table, index_elements: list[str], values: dict):
         from sqlalchemy.dialects.sqlite import insert as dialect_insert
     stmt = dialect_insert(table).values(**values)
     set_ = {k: stmt.excluded[k] for k in values if k not in index_elements}
+    return stmt.on_conflict_do_update(index_elements=index_elements, set_=set_)
+
+
+def upsert_many(engine, table: Table, index_elements: list[str], rows: list[dict]):
+    """Bulk INSERT ... ON CONFLICT DO UPDATE — the executemany sibling of upsert().
+
+    Every row must carry the same keys (executemany binds one compiled
+    statement). Returns None for an empty list so callers can skip the round
+    trip. Use this instead of looping upsert() for series data: price_history
+    writes ~250 rows per security per day, and a statement each would be ~250
+    round trips.
+    """
+    if not rows:
+        return None
+    if engine.dialect.name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert as dialect_insert
+    else:
+        from sqlalchemy.dialects.sqlite import insert as dialect_insert
+    stmt = dialect_insert(table)
+    set_ = {k: stmt.excluded[k] for k in rows[0] if k not in index_elements}
     return stmt.on_conflict_do_update(index_elements=index_elements, set_=set_)
 
 

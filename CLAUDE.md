@@ -170,6 +170,20 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   agorot; same-date re-entry updates the close). Both tiers upsert one
   `quotes` row per security via `db.upsert()`. Empty/all-NaN yfinance
   history never overwrites good data (`status` = `no_data`/`stale`).
+- **`price_history`** (daily closes behind the detail-page chart) — written by
+  `collect_prices` from the **SAME ~400d frame it already pulls** for the period
+  anchors: **no extra yfinance calls, ever**. Persisted only on the daily anchor
+  refresh (`CHART_DAYS=365` of it); the short intra-day runs skip it. Stored
+  `close` is the **NORMALIZED major-currency** value — it reuses the same
+  `scale` from `normalize_currency()` that produced `quotes.last_price`, so the
+  latest history close equals the watchlist price exactly. **Never store raw
+  sub-units** (agorot/pence) and never re-divide: the ÷100 has exactly one home.
+  Manual-tier securities mirror their `manual_prices` points as-is (sparse is
+  correct — **nothing is interpolated or invented**). Retention
+  `RETENTION_DAYS=400` (~13 months), pruned every run. Bulk writes go through
+  `db.upsert_many()` (executemany ON CONFLICT DO UPDATE) — use it, not a loop of
+  `upsert()`, for series data; DO UPDATE also lets a later Yahoo adjustment
+  correct a past close.
 - Yahoo symbol resolution: `securities.yahoo_symbol` override, else
   `symbol` + `.TA` for `market=TASE` (`securities.resolve_yahoo_symbol`).
 - **Onboarding engine** (`desk/onboarding.py`, CLI `desk/onboard_cli.py`) —
