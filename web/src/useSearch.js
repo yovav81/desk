@@ -24,9 +24,14 @@ const LIMIT = 10;
 
 export function routeQuery(q) {
   const s = (q || '').trim();
-  if (s.length < 2) return 'none';
+  if (!s) return 'none';
   // Yahoo 400s on Hebrew, and a TASE security number means nothing to it.
-  if (HEBREW_RE.test(s) || DIGITS_RE.test(s)) return 'tase';
+  // Hebrew/number searches are substring/prefix matches over a 557-row table,
+  // so a single character floods the dropdown — keep a 2-char floor there.
+  if (HEBREW_RE.test(s) || DIGITS_RE.test(s)) return s.length >= 2 ? 'tase' : 'none';
+  // Latin: ONE character is a legitimate query. C (Citigroup), F (Ford),
+  // T (AT&T) and V (Visa) are real tickers, and the Edge Function ranks an
+  // exact ticker match first, so "C" surfaces Citigroup at the top.
   return 'edge';
 }
 
@@ -40,7 +45,19 @@ function escapeLike(s) {
 //   { key, market, sec_id, symbol, name, asset_type, yahoo_symbol,
 //     maya_company_id, price_source, badge, sub }
 
-function taseCandidate(row) {
+// SEC titles carry a state-of-incorporation suffix: "BANK OF AMERICA CORP /DE/"
+// means Delaware, NOT Germany — displaying it next to a GLOBAL badge system is
+// actively confusing. Strip trailing "/XX/" groups (some rows carry more than
+// one, and the closing slash is sometimes missing). Cosmetic only; the ticker,
+// market and sec_id are untouched. Falls back to the raw title if a name were
+// to reduce to nothing.
+export function cleanSecName(name) {
+  const s = String(name ?? '');
+  const cleaned = s.replace(/(\s*\/[A-Za-z]{2,4}\/?)+\s*$/, '').trim();
+  return cleaned || s;
+}
+
+export function taseCandidate(row) {
   // collect_tase_list.py never populates `symbol` (there is no free
   // number->letter-ticker source), so yahoo_symbol is unknown here and
   // `<number>.TA` is NOT a valid guess — yfinance 404s it. price_source
@@ -63,19 +80,24 @@ function taseCandidate(row) {
   };
 }
 
-function edgeCandidate(c) {
+export function edgeCandidate(c) {
+  // Only SEC titles carry the /XX/ suffix; Yahoo names don't.
+  const name = c.market === 'US' ? cleanSecName(c.name) : c.name;
   return {
     key: `${c.market}:${c.symbol}`,
+    // Carried through to the insert VERBATIM — US stays US, GLOBAL stays
+    // GLOBAL. Never inferred downstream.
     market: c.market, // US | GLOBAL
     sec_id: c.symbol,
     symbol: c.symbol,
-    name: c.name,
+    name,
     asset_type: 'stock',
+    // A picked Yahoo symbol is exactly what the collector needs to price it.
     yahoo_symbol: c.symbol,
     maya_company_id: null,
     price_source: 'yfinance',
     badge: c.market === 'US' ? 'US' : 'GLOBAL',
-    sub: c.market === 'US' ? `${c.name} · US` : `${c.symbol} · ${c.exchange || 'GLOBAL'}`,
+    sub: c.market === 'US' ? `${name} · US` : `${c.symbol} · ${c.exchange || 'GLOBAL'}`,
   };
 }
 

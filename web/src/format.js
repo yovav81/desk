@@ -25,22 +25,39 @@ export function retColor(v) {
   return t.mut;
 }
 
+// quotes.currency is authoritative and already post-conversion (ILS never ILA,
+// GBP never GBp) — trust it over the market. An unmapped currency shows its
+// code rather than a wrong symbol.
+const CCY_SYMBOL = {
+  USD: '$',
+  ILS: '₪',
+  EUR: '€',
+  GBP: '£',
+  JPY: '¥',
+  CHF: 'Fr',
+};
+
 export function ccySymbol(currency, market) {
-  if (currency === 'USD') return '$';
-  if (currency === 'ILS') return '₪';
-  // Fallback by market if currency is missing.
-  return market === 'US' ? '$' : '₪';
+  if (currency) return CCY_SYMBOL[currency] || currency;
+  // Fallback only when currency is missing. GLOBAL spans many currencies —
+  // guessing one would be a lie, so it gets nothing.
+  if (market === 'US') return '$';
+  if (market === 'TASE') return '₪';
+  return '';
 }
 
 // Display name (main line) + sub-line, driven by our real data.
+// GLOBAL must be handled explicitly everywhere: this file predates the GLOBAL
+// market (added in 4a), and a bare `market === 'US' ? … : …` silently rendered
+// every global security as TASE — DLGM.XD showed up as `DLGM.XD · ת"א`.
 export function displayName(sec) {
-  return sec.market === 'US' ? sec.symbol : sec.name;
+  // Latin-market identity is the ticker; TASE's is the Hebrew name.
+  return sec.market === 'US' || sec.market === 'GLOBAL' ? sec.symbol : sec.name;
 }
 
 export function subLine(sec) {
-  if (sec.market === 'US') {
-    return `${sec.name} · US`;
-  }
+  if (sec.market === 'US') return `${sec.name} · US`;
+  if (sec.market === 'GLOBAL') return `${sec.name} · GLOBAL`;
   const kind = sec.asset_type === 'bond' ? 'אג"ח' : 'ת"א';
   return `${sec.sec_id} · ${kind}`;
 }

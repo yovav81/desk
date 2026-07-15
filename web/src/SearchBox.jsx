@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { theme as t } from './theme';
-import { useSearch } from './useSearch';
+import { routeQuery, useSearch } from './useSearch';
 
 // Search + candidate picker for adding a security. Layout/colors mirror
 // design_reference (search input + absolutely-positioned dropdown).
@@ -53,7 +53,9 @@ export default function SearchBox({ onAdd, existingIds = [] }) {
     }
   }
 
-  const showDropdown = open && query.trim().length >= 2;
+  // Gate on the same rule that decides whether a search actually runs — a
+  // hardcoded length here would re-break single-letter tickers ("C").
+  const showDropdown = open && routeQuery(query) !== 'none';
 
   return (
     <div ref={boxRef} style={{ position: 'relative', padding: '0 24px 8px' }}>
