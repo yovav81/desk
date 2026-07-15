@@ -5,9 +5,10 @@ import Watchlist from './Watchlist';
 import News from './News';
 import { useWatchlist } from './useWatchlist';
 
-// STEP 3: login + two-panel dashboard — watchlist table (right) and the
-// unified news/email/filings feed (left) with three filter tabs. All
-// READ-ONLY from Supabase. No add/search/detail yet. Styling mirrors
+// STEP 4b-3: login + two-panel dashboard — watchlist table (right, with search
+// + add/remove) and the unified news/email/filings feed (left) with three
+// filter tabs. Reads are READ-ONLY from Supabase; the only writes are watchlist
+// add/remove (see useWatchlist). No detail page yet. Styling mirrors
 // design_reference/ (Ocean theme, gold accent), our own clean implementation.
 
 export default function App() {
@@ -228,7 +229,13 @@ function Dashboard({ session }) {
       {/* content: watchlist (right, primary in RTL) + news feed (left) */}
       <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
         <div style={{ width: '56%', display: 'flex', minWidth: 0, minHeight: 0 }}>
-          <Watchlist rows={wl.rows} status={wl.status} error={wl.error} />
+          <Watchlist
+            rows={wl.rows}
+            status={wl.status}
+            error={wl.error}
+            onAdd={wl.add}
+            onRemove={wl.remove}
+          />
         </div>
         <div style={{ width: 1, background: t.bd, flexShrink: 0 }} />
         <div style={{ flex: 1, display: 'flex', minWidth: 0, minHeight: 0 }}>

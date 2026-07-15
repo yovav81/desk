@@ -178,10 +178,39 @@
             datacenter-IP question from EDGE_SEARCH_FINDINGS.md for Yahoo/SEC.
       - [ ] Add the real app origin to ALLOWED_ORIGIN_RE when the UI is
             deployed (Vercel step).
-- [ ] Step 4b-3 — search + picker + add/remove security in the UI, over the
-      onboarding engine (suggest/resolve/add_to_db) + tase_securities for
-      instant Israeli search.
-- [ ] Security detail page.
+- [x] Step 4b-3 — search + picker + add/remove in the UI — DONE (2026-07-15).
+      web/src/useSearch.js routes by query: Hebrew or bare digits →
+      `tase_securities` directly (ilike name / prefix-match security_number);
+      Latin → the `search` Edge Function via supabase.functions.invoke (sends
+      the anon key/JWT). Debounced 300ms with an out-of-order guard. NEVER
+      auto-picks. web/src/SearchBox.jsx = input + dropdown picker (market badge
+      ת"א/US/GLOBAL, loading/"לא נמצאו תוצאות"/error states, Edge notes[]
+      surfaced). useWatchlist gains add()/remove(): optimistic UI, shallow
+      insert into `securities` (ON CONFLICT DO NOTHING — never downgrades an
+      enriched row) + `watchlist` upsert; remove deletes the watchlist row ONLY
+      (security/news/filings are shared and survive). No quotes row renders as
+      a gold "ממתין לנתונים" badge. Verified: build + oxlint clean, routeQuery
+      unit-tested against the real module (13 cases).
+      - [ ] **BLOCKED until the RLS SQL is run** (given to the user, not run by
+            us): read policy for `tase_securities` (it never had one — RLS
+            without a policy returns 0 rows and NO error, so search looks empty
+            but is a permission block), plus INSERT on `securities`,
+            INSERT/DELETE on `watchlist`, and USAGE on `watchlist_id_seq`
+            (SERIAL pk — insert fails without it). Live search/add/remove is
+            unverified until then.
+      - [ ] **TASE adds do NOT get prices automatically** — the cron
+            (collect.yml) runs news/macro/email/prices/maya but NOT
+            `desk.maya_ids` or the onboarding resolver. `tase_securities.symbol`
+            is always NULL (no free number→ticker source), so a TASE pick is
+            inserted price_source='manual' with yahoo_symbol NULL and stays at
+            "ממתין לנתונים" until someone runs
+            `python -m desk.onboard_cli resolve TASE <number> --add` (which
+            resolves the ticker + maya_company_id and can upgrade
+            manual→yfinance). US/GLOBAL adds DO fill in within ~15 min.
+            **Fix properly by adding an enrichment step to collect.yml**
+            (maya_ids + an onboarding pass over unenriched securities) — the
+            collectors were out of scope for this step.
+- [ ] Step 5 — security detail page.
 - [ ] Draggable panel divider + mobile tabs (polish).
 - [ ] Deploy (Vercel) — not yet.
 

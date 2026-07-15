@@ -16,6 +16,7 @@ export function useWatchlist() {
   const [rows, setRows] = useState([]);
   const [status, setStatus] = useState('loading'); // loading | ready | error
   const [error, setError] = useState('');
+  const [ownerId, setOwnerId] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -34,6 +35,7 @@ export function useWatchlist() {
         setStatus('ready');
         return;
       }
+      if (!cancelled) setOwnerId(owner.id);
       if (import.meta.env.DEV) console.debug('[watchlist] owner user id =', owner.id);
 
       // 2) that user's watchlist sec_ids
@@ -94,7 +96,82 @@ export function useWatchlist() {
     };
   }, []);
 
-  return { rows, status, error };
+  // --- add ----------------------------------------------------------------
+  // SHALLOW insert only. The browser deliberately does NOT resolve prices or
+  // the MAYA companyId (no yfinance, no MAYA calls from the client) — it writes
+  // what the candidate already told us and leaves enrichment to the Python
+  // side. Returns { ok, reason } — never throws at the caller.
+  async function add(cand) {
+    if (!ownerId) return { ok: false, reason: 'no-user' };
+    if (rows.some((r) => r.sec_id === cand.sec_id)) return { ok: false, reason: 'duplicate' };
+
+    // Optimistic: show the row now, with no quote (the UI renders that as
+    // "ממתין לנתונים"), and roll it back if the write fails.
+    const optimistic = {
+      sec_id: cand.sec_id,
+      symbol: cand.symbol,
+      name: cand.name,
+      asset_type: cand.asset_type,
+      market: cand.market,
+      price_source: cand.price_source,
+      quote: null,
+    };
+    const prev = rows;
+    setRows((rs) => [...rs, optimistic].sort((a, b) => displayKey(a).localeCompare(displayKey(b))));
+
+    // ignoreDuplicates => INSERT ... ON CONFLICT DO NOTHING, so an existing
+    // security is left exactly as it is. Never clobber a good row (e.g. one the
+    // collectors already enriched) with our shallower knowledge.
+    const { error: e1 } = await supabase.from('securities').upsert(
+      {
+        sec_id: cand.sec_id,
+        symbol: cand.symbol,
+        name: cand.name,
+        asset_type: cand.asset_type,
+        market: cand.market,
+        price_source: cand.price_source,
+        yahoo_symbol: cand.yahoo_symbol,
+        maya_company_id: cand.maya_company_id,
+      },
+      { onConflict: 'sec_id', ignoreDuplicates: true }
+    );
+    if (e1) {
+      setRows(prev);
+      return { ok: false, reason: 'securities-insert', message: e1.message };
+    }
+
+    const { error: e2 } = await supabase
+      .from('watchlist')
+      .upsert({ user_id: ownerId, sec_id: cand.sec_id }, { onConflict: 'user_id,sec_id', ignoreDuplicates: true });
+    if (e2) {
+      setRows(prev);
+      return { ok: false, reason: 'watchlist-insert', message: e2.message };
+    }
+    return { ok: true };
+  }
+
+  // --- remove -------------------------------------------------------------
+  // Watchlist row ONLY. The security itself and everything collected against it
+  // (news, filings, emails, quotes) are shared across users and must survive —
+  // removing them here would delete another user's data.
+  async function remove(secId) {
+    if (!ownerId) return { ok: false, reason: 'no-user' };
+    const prev = rows;
+    setRows((rs) => rs.filter((r) => r.sec_id !== secId));
+
+    const { error: e } = await supabase
+      .from('watchlist')
+      .delete()
+      .eq('user_id', ownerId)
+      .eq('sec_id', secId);
+    if (e) {
+      setRows(prev);
+      return { ok: false, reason: 'watchlist-delete', message: e.message };
+    }
+    return { ok: true };
+  }
+
+  return { rows, status, error, add, remove };
 }
 
 function displayKey(s) {

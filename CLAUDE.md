@@ -61,8 +61,38 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
 - Data queries avoid PostgREST nested embeds (FK relationships aren't detected
   on the raw-created tables — embeds return null joins); use flat `.in()`
   queries merged in JS instead (see `useWatchlist.js`).
-- Current state: **step 3** — login + two-panel dashboard (watchlist right,
-  news feed left). Add/search and the detail page are later steps.
+- **Search routing** (`web/src/useSearch.js`, `web/src/SearchBox.jsx`) — one box,
+  three sources, routed by what was typed: **Hebrew or a bare digit-string →
+  `tase_securities` queried DIRECTLY** (ilike on `name`, prefix match on
+  `security_number`) — instant, local, no MAYA call per keystroke; **Latin
+  ticker/name → the `search` Edge Function** via `supabase.functions.invoke`
+  (which sends the anon key/JWT). Debounced 300ms with an out-of-order guard.
+  **Never auto-picks** — always a candidate list with a market badge, because
+  same-ticker collisions (SAP SE vs Saputo) are valid-but-different companies.
+- **Add = SHALLOW insert + collector enrichment.** The browser writes only what
+  the candidate already told it (`sec_id`/`symbol`/`name`/`market`, plus
+  `yahoo_symbol` and `maya_company_id` where known) — it never calls yfinance or
+  MAYA to resolve prices/companyIds. `securities` is inserted **ON CONFLICT DO
+  NOTHING** (`ignoreDuplicates`) so an already-enriched row is never downgraded;
+  then a `watchlist` row for the current user. A security with no `quotes` row
+  renders as **"ממתין לנתונים"** (not a blank). **Caveat:** only US/GLOBAL adds
+  self-enrich (collect_prices, ~15 min). A **TASE** add has no letter ticker
+  (`tase_securities.symbol` is always NULL — no free number→ticker source, and
+  `<number>.TA` 404s), so it is inserted `price_source='manual'` and stays
+  pending until `python -m desk.onboard_cli resolve TASE <number> --add` runs —
+  the cron does **not** run `maya_ids`/onboarding. See TODO 4b-3.
+- **Remove = watchlist row ONLY.** Never delete the security or its
+  news/emails/filings/quotes — those are **shared across users**, so deleting
+  them would destroy another user's data.
+- **Writes need RLS policies too** (same trap as reads): the UI's add/remove
+  needs INSERT on `securities`, INSERT/DELETE on `watchlist`, **USAGE on
+  `watchlist_id_seq`** (SERIAL pk — inserts fail without it), and a **read
+  policy on `tase_securities`**. Scoped `to authenticated` (login required), not
+  `anon`. They can't yet be scoped per-user — `watchlist.user_id` still points at
+  our `users` table, not the Auth uid, so **any logged-in user can modify any
+  watchlist row**; tighten when the auth-uid mapping lands.
+- Current state: **step 4b-3** — login + two-panel dashboard (watchlist right
+  with search/add/remove, news feed left). The detail page is the next step.
 
 ## Architecture
 

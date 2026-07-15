@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { theme as t } from './theme';
+import SearchBox from './SearchBox';
 import {
   ccySymbol,
   displayName,
@@ -8,7 +10,8 @@ import {
   subLine,
 } from './format';
 
-// Desktop watchlist table (right/primary panel in RTL). READ-ONLY.
+// Desktop watchlist table (right/primary panel in RTL). Reads stay read-only;
+// the only writes are watchlist add/remove, which App passes in as handlers.
 // Data comes in as props so App can fetch the watchlist once and share the
 // sec_ids with the news panel.
 
@@ -19,13 +22,14 @@ const RET_KEYS = [
   { key: 'y12_pct', label: "12ח׳" },
 ];
 
-// name | price | day | mtd | qtd | ytd | y12
+// name | price | day | mtd | qtd | ytd | y12 | remove
 const GRID =
-  'minmax(150px,1.6fr) minmax(84px,110px) minmax(58px,72px) repeat(4, minmax(52px,66px))';
+  'minmax(150px,1.6fr) minmax(84px,110px) minmax(58px,72px) repeat(4, minmax(52px,66px)) 32px';
 
 const mono = "'IBM Plex Mono', monospace";
 
-export default function Watchlist({ rows = [], status = 'loading', error = '' }) {
+export default function Watchlist({ rows = [], status = 'loading', error = '', onAdd, onRemove }) {
+  const existingIds = rows.map((r) => r.sec_id);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
       <div style={{ padding: '18px 24px 12px', display: 'flex', alignItems: 'baseline', gap: 10 }}>
@@ -34,6 +38,8 @@ export default function Watchlist({ rows = [], status = 'loading', error = '' })
           {status === 'ready' ? `· ${rows.length} ניירות` : ''}
         </div>
       </div>
+
+      <SearchBox onAdd={onAdd} existingIds={existingIds} />
 
       {status === 'loading' && <Notice title="טוען…" />}
       {status === 'error' && (
@@ -49,7 +55,7 @@ export default function Watchlist({ rows = [], status = 'loading', error = '' })
           <HeaderRow />
           <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflowY: 'auto', minHeight: 0 }}>
             {rows.map((sec) => (
-              <Row key={sec.sec_id} sec={sec} />
+              <Row key={sec.sec_id} sec={sec} onRemove={onRemove} />
             ))}
           </div>
         </div>
@@ -81,13 +87,18 @@ function HeaderRow() {
           {r.label}
         </div>
       ))}
+      <div />
     </div>
   );
 }
 
-function Row({ sec }) {
+function Row({ sec, onRemove }) {
   const q = sec.quote;
   const manual = sec.price_source === 'manual';
+  // No quotes row yet = the collectors haven't priced it (a just-added security,
+  // up to ~15 min). Show that explicitly — a blank price is indistinguishable
+  // from a broken one.
+  const pending = q == null;
   const dayText = manual ? '—' : fmtPct(q?.day_change_pct);
   const dayColor = manual ? t.mut : retColor(q?.day_change_pct);
 
@@ -133,20 +144,38 @@ function Row({ sec }) {
             {subLine(sec)}
           </div>
         </div>
-        {manual && (
+        {pending ? (
           <div
             style={{
               fontSize: 10,
               fontWeight: 600,
-              color: t.mut,
-              border: `1px solid ${t.bd}`,
+              color: t.acc,
+              border: `1px solid ${t.accDim}`,
+              background: t.accSoft,
               borderRadius: 5,
               padding: '2px 6px',
               flexShrink: 0,
+              whiteSpace: 'nowrap',
             }}
           >
-            ידני
+            ממתין לנתונים
           </div>
+        ) : (
+          manual && (
+            <div
+              style={{
+                fontSize: 10,
+                fontWeight: 600,
+                color: t.mut,
+                border: `1px solid ${t.bd}`,
+                borderRadius: 5,
+                padding: '2px 6px',
+                flexShrink: 0,
+              }}
+            >
+              ידני
+            </div>
+          )
         )}
       </div>
 
@@ -175,7 +204,36 @@ function Row({ sec }) {
           {fmtPct(q?.[r.key])}
         </div>
       ))}
+
+      {/* remove — watchlist row only; the security and its news/filings stay */}
+      <div style={{ textAlign: 'center' }}>
+        <RemoveButton onClick={() => onRemove?.(sec.sec_id)} />
+      </div>
     </div>
+  );
+}
+
+function RemoveButton({ onClick }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      title="הסרה מהרשימה"
+      style={{
+        background: 'none',
+        border: 'none',
+        color: hover ? t.red : t.mut,
+        fontSize: 15,
+        cursor: 'pointer',
+        padding: '2px 6px',
+        borderRadius: 6,
+        fontFamily: 'Heebo, sans-serif',
+      }}
+    >
+      ×
+    </button>
   );
 }
 
