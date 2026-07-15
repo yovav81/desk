@@ -48,12 +48,30 @@ type Candidate = {
 const ALLOWED_ORIGIN_RE =
   /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$|^https:\/\/([a-z0-9-]+\.)*vercel\.app$/i;
 
+// supabase-js does NOT send only what we ask for: functions.invoke() attaches
+// its own headers (x-client-info always; x-supabase-api-version on newer
+// clients). Any header the browser sends must be listed here or the PREFLIGHT
+// fails and the real request is never made — the error names one header at a
+// time, so listing the whole standard set now avoids rediscovering it per
+// header. This widens only the ALLOWED-HEADERS list; the origin allowlist and
+// JWT verification are untouched.
+const ALLOWED_HEADERS = [
+  "authorization", // the anon key / user JWT
+  "apikey", // supabase-js sends this alongside authorization
+  "content-type", // POST JSON body
+  "x-client-info", // supabase-js client version — the one that broke us
+  "x-supabase-api-version",
+].join(", ");
+
 function corsHeaders(origin: string | null): Record<string, string> {
   const allow = origin && ALLOWED_ORIGIN_RE.test(origin) ? origin : "null";
   return {
     "Access-Control-Allow-Origin": allow,
-    "Access-Control-Allow-Headers": "authorization, apikey, content-type",
+    "Access-Control-Allow-Headers": ALLOWED_HEADERS,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    // Cache the preflight so a debounced search doesn't pay for an extra
+    // round-trip on every keystroke.
+    "Access-Control-Max-Age": "86400",
     "Vary": "Origin",
   };
 }
