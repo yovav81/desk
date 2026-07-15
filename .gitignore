@@ -9,3 +9,5 @@ research/*.xml
 research/*.txt
 research/maya_*.json
 
+
+env_backup.txt

@@ -17,6 +17,7 @@ jobs:
       DESK_DEFAULT_USER: ${{ secrets.DESK_DEFAULT_USER }}
       GMAIL_USER: ${{ secrets.GMAIL_USER }}
       GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
     steps:
       - uses: actions/checkout@v4
 
@@ -52,3 +53,7 @@ jobs:
       # One cookie harvest per run; fail-soft if the Imperva gate blocks this IP.
       - name: Collect MAYA filings
         run: python -m desk.collect_maya
+
+      # --commit is required: the CLI defaults to dry-run.
+      - name: Collect SEC filings
+        run: python -m desk.collect_sec --commit

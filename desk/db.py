@@ -56,6 +56,7 @@ securities = Table(
     Column("price_source", String(16), nullable=False, server_default="yfinance"),  # yfinance | manual
     Column("yahoo_symbol", String(32), nullable=True),  # override; default resolution in securities.py
     Column("maya_company_id", Integer, nullable=True),  # MAYA internal companyId; resolved+cached by desk/maya_ids.py
+    Column("cik", Integer, nullable=True),  # SEC EDGAR CIK (US only); resolved+cached by desk/sec_ids.py
 )
 
 watchlist = Table(
@@ -149,8 +150,12 @@ filings = Table(
     metadata,
     Column("id", Integer, primary_key=True),
     Column("sec_id", String(32), ForeignKey("securities.sec_id"), nullable=True),
-    Column("source", String(16), nullable=False),  # maya
-    Column("maya_id", Integer, nullable=False),  # MAYA announcement id — dedup key
+    Column("source", String(16), nullable=False),  # maya | sec
+    # Each source carries its OWN id and dedups on its own guard; the other is
+    # NULL. NULLs are distinct in a unique index on both Postgres and SQLite, so
+    # the two guards never interfere. See sql/002_sec_collector.sql.
+    Column("maya_id", Integer, nullable=True),  # MAYA announcement id — dedup key for source='maya'
+    Column("accession_no", String(32), nullable=True),  # SEC accession — dedup key for source='sec'
     Column("title", Text, nullable=False),
     Column("published_at", DateTime(timezone=True), nullable=True),
     Column("doc_url", Text, nullable=True),
@@ -158,6 +163,10 @@ filings = Table(
     UniqueConstraint("source", "maya_id", name="uq_filings_source_maya_id"),  # dedup guard — sacred, like news.url
 )
 Index("ix_filings_published_at", filings.c.published_at)
+# SEC dedup guard. A unique INDEX (not a constraint) to mirror the live DB,
+# where sql/002 used CREATE UNIQUE INDEX IF NOT EXISTS for idempotency.
+# ON CONFLICT (source, accession_no) infers from it identically.
+Index("uq_filings_source_accession", filings.c.source, filings.c.accession_no, unique=True)
 
 # Searchable TASE securities catalogue — the LOCAL source for instant Israeli
 # search in the UI (populated browserlessly from MAYA by collect_tase_list.py).
