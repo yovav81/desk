@@ -300,8 +300,34 @@
             watchlist row, now locked.
       - [ ] Browser test after the SQL: my rows still there; a 2nd test user
             sees an EMPTY watchlist and none of mine.
-- [ ] Step 6b-2 — Vercel deploy (add the deployed origin to ALLOWED_ORIGIN_RE
-      in the Edge Function when it lands).
+- [ ] Step 6b-2 — Vercel deploy. Prep DONE (2026-07-15): web/DEPLOY.md is the
+      ordered checklist. **No code/config change was needed** — no vercel.json
+      (Root Directory is a project setting a config file can't set, and the Vite
+      preset already yields `npm run build` → `dist`; a file would only restate
+      defaults and drift). Grepped web/src: nothing hardcodes localhost, and
+      `functions.invoke('search')` resolves against VITE_SUPABASE_URL.
+      Settings: Root Directory `web` (the only non-default), preset Vite,
+      everything else default. `.env`/`dist` are gitignored; only `.env.example`
+      is tracked.
+      - [ ] **RUN sql/6b-1_per_user_auth_rls.sql FIRST.** The anon key is public
+            in the bundle by design; until 6b-1 lands `watchlist` still has
+            `anon read using(true)`, so a public URL would expose every
+            watchlist to anyone who loads the page, logged in or not.
+      - [ ] Push BEFORE connecting Vercel (it builds from GitHub, not the laptop).
+      - [ ] Add VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY (Production+Preview)
+            **before the first build** — Vite inlines them at BUILD time; adding
+            them later needs a Redeploy.
+      - [ ] Supabase Site URL / Redirect URLs: **not required for login** (we
+            only use signInWithPassword — no magic link/OAuth/confirmation
+            redirect), but set them anyway or future password-reset emails will
+            point at the localhost:3000 default.
+      - [ ] Edge CORS: `*.vercel.app` already covers production AND preview
+            (verified against real URL shapes) — **no function redeploy needed**.
+            A custom domain would need adding to ALLOWED_ORIGIN_RE + redeploy.
+      - [ ] **Tighten ALLOWED_ORIGIN_RE once the URL is known** — `*.vercel.app`
+            currently lets ANY vercel.app-hosted site call our function. Low
+            impact (public-data search proxy, JWT on) but the bound is weak
+            since the anon key is public.
 - [ ] Step 6c — UI polish: draggable panel divider, sticky name column, mobile
       layout.
 

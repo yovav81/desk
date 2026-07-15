@@ -36,6 +36,15 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   data **READ-only**; collectors remain the only writers.
 - `design_reference/` is a **visual-only** mockup (Claude Design export) — read
   it for colors/spacing/layout, never wire its code as the app or modify it.
+- **Deployment: Vercel, settings in the dashboard — no `vercel.json`** (Root
+  Directory is a project setting a config file cannot set; the Vite preset
+  already gives `npm run build` → `dist`). Root Directory is **`web`** (the repo
+  root has no package.json) — the only non-default. Full checklist:
+  `web/DEPLOY.md`. `VITE_*` vars are inlined at **BUILD** time, so they must
+  exist in Vercel *before* the first build; adding them later requires a
+  redeploy. Auth is `signInWithPassword` only, so Supabase's Site/Redirect URLs
+  aren't needed for login — but set them, or link-based emails (password reset)
+  point at the `localhost:3000` default.
 - Data reads use the Supabase JS client (`web/src/useWatchlist.js`) against the
   same Postgres the collectors write; UI stays **READ-only**. Prices are
   already ILS-converted by the collector — the UI never divides by 100 again.
