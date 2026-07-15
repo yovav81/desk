@@ -91,8 +91,28 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   `anon`. They can't yet be scoped per-user — `watchlist.user_id` still points at
   our `users` table, not the Auth uid, so **any logged-in user can modify any
   watchlist row**; tighten when the auth-uid mapping lands.
-- Current state: **step 4b-3** — login + two-panel dashboard (watchlist right
-  with search/add/remove, news feed left). The detail page is the next step.
+- **Security detail page** (`web/src/Detail.jsx`, `Chart.jsx`,
+  `usePriceHistory.js`) — full-screen, reached by clicking a watchlist row
+  (`openSecId` state in App; one page, **no router**). The × calls
+  `stopPropagation()` so removing never also navigates. The chart is a
+  **hand-rolled SVG** — deliberately **no charting library** — with time
+  left→right so the newest point sits on the right (SVG coords are absolute and
+  RTL does not mirror them). The line is the **gold accent**: a chart is
+  decorative, and `grn`/`red` stay reserved for returns. The full series is
+  fetched **once** and the חודש/רבעון/שנה selector **slices it client-side** —
+  never refetch per period. Prices come from `quotes.currency` /
+  `price_history.close`, both already normalized — **never re-divide**.
+  **Never draw a line we can't justify:** manual-tier securities show
+  "מחיר ידני, נכון ל-<date>" with no chart, <5 points shows "אין מספיק היסטוריה",
+  and a period slice with <2 points says so — a 2-point line implies a trend
+  that isn't there.
+- `web/src/FeedItem.jsx` holds the feed item + source badges, **shared** by
+  News.jsx and Detail.jsx so the four source types can't drift apart. The detail
+  feed (`useSecurityFeed(secId)` in useNews.js) filters **server-side** by
+  sec_id and omits the security tag (redundant inside one security).
+- Current state: **step 5b** — login, two-panel dashboard (watchlist right with
+  search/add/remove, news feed left) and the full-screen security detail page.
+  Next is polish + deploy.
 
 ## Architecture
 

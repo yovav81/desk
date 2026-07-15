@@ -28,7 +28,7 @@ const GRID =
 
 const mono = "'IBM Plex Mono', monospace";
 
-export default function Watchlist({ rows = [], status = 'loading', error = '', onAdd, onRemove }) {
+export default function Watchlist({ rows = [], status = 'loading', error = '', onAdd, onRemove, onOpen }) {
   const existingIds = rows.map((r) => r.sec_id);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
@@ -55,7 +55,7 @@ export default function Watchlist({ rows = [], status = 'loading', error = '', o
           <HeaderRow />
           <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflowY: 'auto', minHeight: 0 }}>
             {rows.map((sec) => (
-              <Row key={sec.sec_id} sec={sec} onRemove={onRemove} />
+              <Row key={sec.sec_id} sec={sec} onRemove={onRemove} onOpen={onOpen} />
             ))}
           </div>
         </div>
@@ -92,7 +92,8 @@ function HeaderRow() {
   );
 }
 
-function Row({ sec, onRemove }) {
+function Row({ sec, onRemove, onOpen }) {
+  const [hover, setHover] = useState(false);
   const q = sec.quote;
   const manual = sec.price_source === 'manual';
   // No quotes row yet = the collectors haven't priced it (a just-added security,
@@ -104,6 +105,9 @@ function Row({ sec, onRemove }) {
 
   return (
     <div
+      onClick={() => onOpen?.(sec.sec_id)}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
       style={{
         display: 'grid',
         gridTemplateColumns: GRID,
@@ -111,6 +115,8 @@ function Row({ sec, onRemove }) {
         alignItems: 'center',
         padding: '11px 24px',
         borderBottom: `1px solid ${t.bd}`,
+        cursor: onOpen ? 'pointer' : 'default',
+        background: hover ? t.surf2 : 'transparent',
       }}
     >
       {/* name + sub + manual tag */}
@@ -207,7 +213,13 @@ function Row({ sec, onRemove }) {
 
       {/* remove — watchlist row only; the security and its news/filings stay */}
       <div style={{ textAlign: 'center' }}>
-        <RemoveButton onClick={() => onRemove?.(sec.sec_id)} />
+        <RemoveButton
+          onClick={(e) => {
+            // The row opens the detail page; the × must not do both.
+            e.stopPropagation();
+            onRemove?.(sec.sec_id);
+          }}
+        />
       </div>
     </div>
   );

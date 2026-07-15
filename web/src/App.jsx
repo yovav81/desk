@@ -3,13 +3,16 @@ import { supabase } from './supabaseClient';
 import { theme as t } from './theme';
 import Watchlist from './Watchlist';
 import News from './News';
+import Detail from './Detail';
 import { useWatchlist } from './useWatchlist';
 
-// STEP 4b-3: login + two-panel dashboard — watchlist table (right, with search
-// + add/remove) and the unified news/email/filings feed (left) with three
-// filter tabs. Reads are READ-ONLY from Supabase; the only writes are watchlist
-// add/remove (see useWatchlist). No detail page yet. Styling mirrors
-// design_reference/ (Ocean theme, gold accent), our own clean implementation.
+// STEP 5b: login + two-panel dashboard — watchlist table (right, with search +
+// add/remove) and the unified news/email/filings feed (left) with three filter
+// tabs — plus the full-screen security detail page (chart + numbers + that
+// security's feed) reached by clicking a watchlist row. Reads are READ-ONLY
+// from Supabase; the only writes are watchlist add/remove (see useWatchlist).
+// Styling mirrors design_reference/ (Ocean theme, gold accent), our own clean
+// implementation.
 
 export default function App() {
   const [session, setSession] = useState(null);
@@ -173,6 +176,9 @@ function Field({ label, ...props }) {
 
 function Dashboard({ session }) {
   const wl = useWatchlist();
+  // Which security's detail page is open (null = the dashboard). One page, so
+  // plain state beats pulling in a router.
+  const [openSecId, setOpenSecId] = useState(null);
   const watchSecIds = wl.rows.map((r) => r.sec_id);
   // sec_id -> short label (symbol) for the news security tags. Every displayed
   // feed item with a sec_id is a watchlist security, so this map covers them.
@@ -181,6 +187,14 @@ function Dashboard({ session }) {
   async function onLogout() {
     await supabase.auth.signOut();
   }
+
+  // Resolve against the live rows so a security removed elsewhere can't leave a
+  // detail page open over a row that no longer exists.
+  const openSec = openSecId ? wl.rows.find((r) => r.sec_id === openSecId) : null;
+  if (openSec) {
+    return <Detail sec={openSec} onBack={() => setOpenSecId(null)} />;
+  }
+
   return (
     <div
       style={{
@@ -235,6 +249,7 @@ function Dashboard({ session }) {
             error={wl.error}
             onAdd={wl.add}
             onRemove={wl.remove}
+            onOpen={setOpenSecId}
           />
         </div>
         <div style={{ width: 1, background: t.bd, flexShrink: 0 }} />

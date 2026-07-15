@@ -236,10 +236,38 @@
             it (`create policy "anon read" on public.price_history for select to
             anon, authenticated using (true);`) — same silent-empty trap as the
             other UI-read tables.
-- [ ] Step 5b — security detail page + chart (month/quarter/year selector) over
-      price_history.
-- [ ] Draggable panel divider + mobile tabs (polish).
-- [ ] Deploy (Vercel) — not yet.
+- [x] Step 5b — security detail page + chart — DONE (2026-07-15).
+      Full-screen page (not a drawer) replacing the dashboard via plain state in
+      App (`openSecId`; one page — no router). Clicking a watchlist row opens
+      it; the × calls stopPropagation so remove never also navigates; "חזרה"
+      returns. web/src/Detail.jsx = numbers (price+currency, daily, MTD/QTD/YTD/
+      12M, same green/red/"—" rules) + chart + that security's feed.
+      web/src/Chart.jsx = hand-rolled SVG line chart — **no charting dependency**
+      (nothing to npm install); time runs left→right so the newest point is on
+      the right (SVG coords aren't mirrored by RTL); gold accent line, since a
+      chart is decorative and grn/red stay reserved for returns.
+      web/src/usePriceHistory.js fetches the full stored series ONCE; the
+      חודש/רבעון/שנה selector slices it client-side (never refetches).
+      Honest empty states instead of misleading lines: manual tier →
+      "מחיר ידני, נכון ל-<date>" + no chart/selector; <5 points → "אין מספיק
+      היסטוריה"; a period slice with <2 points → "אין מספיק היסטוריה בתקופה זו".
+      Feed reuses the extracted web/src/FeedItem.jsx (shared with News.jsx, so
+      badges can't drift) via `useSecurityFeed(secId)` — filtered **server-side**
+      by sec_id on all three tables, security tag omitted (redundant inside one
+      security).
+      Verified: build + oxlint clean; 25 assertions on period slicing, chart
+      geometry (oldest→left/newest→right, min→bottom/max→top, flat series
+      doesn't divide by zero, TEVA's real ILS range fits the viewBox), the
+      point-count thresholds against 5a's real counts (AAPL 252 / TEVA 223 /
+      Bagira 23 chart; 1-point and manual don't), and feed scoping.
+      - [ ] **Needs the price_history read policy** or the chart shows "אין
+            מספיק היסטוריה" for everything (RLS returns an empty array with no
+            error). Same trap still open on `news`/`emails`/`filings` — until
+            those have policies the detail feed will look empty too.
+      - [ ] Not visually verified in a browser (no browser here) — worth a look.
+- [ ] Step 6 — polish: draggable panel divider, sticky name column, mobile
+      layout, Vercel deploy (add the deployed origin to ALLOWED_ORIGIN_RE in
+      the Edge Function when it lands).
 
 ## Open items (carried over)
 - [ ] Decide bond price source (DataHub paid EOD vs manual tier) — manual
