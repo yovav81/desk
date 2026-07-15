@@ -1,18 +1,50 @@
 import { useEffect, useState } from 'react';
 import { supabase } from './supabaseClient';
 
-// TODO(auth-mapping): watchlist.user_id references our own `users` table, NOT
-// the Supabase Auth uid. Until that mapping is wired, we read the seeded
-// "owner" user's watchlist so real rows appear. In a later step, resolve the
-// authenticated user's mapped `users.id` and filter by it instead.
-const OWNER_USERNAME = 'owner';
+// Per-user watchlist. `watchlist.user_id` references OUR `users` table (integer
+// id), not the Supabase Auth uid — `users.auth_uid` bridges the two. So every
+// read/write first resolves auth.uid() -> users.id.
+//
+// This resolution is a convenience, NOT the security boundary: the watchlist
+// RLS policies enforce ownership through the same auth.uid() -> users.id hop,
+// so a tampered client still cannot read or write another user's rows.
+
+// First login for an auth account that has no users row yet: create one. Keyed
+// on auth_uid, so re-logins and second tabs never duplicate. The RLS insert
+// policy only permits auth_uid = auth.uid(), so this can only ever create the
+// caller's OWN row.
+async function resolveUserId(user) {
+  const { data, error } = await supabase
+    .from('users')
+    .select('id')
+    .eq('auth_uid', user.id)
+    .maybeSingle();
+  if (error) throw error;
+  if (data) return data.id;
+
+  const { data: created, error: insErr } = await supabase
+    .from('users')
+    .insert({ username: user.email, auth_uid: user.id })
+    .select('id')
+    .maybeSingle();
+  if (!insErr && created) return created.id;
+
+  // Lost a race with another tab (unique auth_uid) — the row exists now.
+  const { data: retry } = await supabase
+    .from('users')
+    .select('id')
+    .eq('auth_uid', user.id)
+    .maybeSingle();
+  if (retry) return retry.id;
+  throw insErr || new Error('could not resolve user');
+}
 
 // PostgREST nested embedding (watchlist -> securities -> quotes) silently
 // returns null joins here — the FK relationships aren't detected on these
 // raw-SQL-created tables — so an embed yields 0 usable rows with no error.
 // We instead mirror the known-good SQL: fetch watchlist sec_ids for the user,
 // then securities + quotes for those ids, and merge on sec_id in JS.
-export function useWatchlist() {
+export function useWatchlist(authUser) {
   const [rows, setRows] = useState([]);
   const [status, setStatus] = useState('loading'); // loading | ready | error
   const [error, setError] = useState('');
@@ -20,29 +52,25 @@ export function useWatchlist() {
 
   useEffect(() => {
     let cancelled = false;
+    if (!authUser) return;
 
     async function load() {
-      // 1) resolve the seeded owner's user id
-      const { data: owner, error: e1 } = await supabase
-        .from('users')
-        .select('id')
-        .eq('username', OWNER_USERNAME)
-        .maybeSingle();
-      if (cancelled) return;
-      if (e1) return fail(e1);
-      if (!owner) {
-        setRows([]);
-        setStatus('ready');
-        return;
+      // 1) resolve THIS logged-in user's users.id (creating it on first login)
+      let userId;
+      try {
+        userId = await resolveUserId(authUser);
+      } catch (e) {
+        return fail(e);
       }
-      if (!cancelled) setOwnerId(owner.id);
-      if (import.meta.env.DEV) console.debug('[watchlist] owner user id =', owner.id);
+      if (cancelled) return;
+      setOwnerId(userId);
+      if (import.meta.env.DEV) console.debug('[watchlist] user id =', userId, 'auth uid =', authUser.id);
 
       // 2) that user's watchlist sec_ids
       const { data: wl, error: e2 } = await supabase
         .from('watchlist')
         .select('sec_id')
-        .eq('user_id', owner.id);
+        .eq('user_id', userId);
       if (cancelled) return;
       if (e2) return fail(e2);
 
@@ -94,7 +122,11 @@ export function useWatchlist() {
     return () => {
       cancelled = true;
     };
-  }, []);
+    // Depend on the primitive uid/email, not the session object: Supabase hands
+    // back a NEW session object on every token refresh, which would otherwise
+    // refetch the whole watchlist roughly hourly for no reason.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authUser?.id, authUser?.email]);
 
   // --- add ----------------------------------------------------------------
   // SHALLOW insert only. The browser deliberately does NOT resolve prices or

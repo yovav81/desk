@@ -175,7 +175,8 @@ function Field({ label, ...props }) {
 }
 
 function Dashboard({ session }) {
-  const wl = useWatchlist();
+  // The logged-in auth user drives the watchlist — no hardcoded 'owner'.
+  const wl = useWatchlist(session.user);
   // Which security's detail page is open (null = the dashboard). One page, so
   // plain state beats pulling in a router.
   const [openSecId, setOpenSecId] = useState(null);

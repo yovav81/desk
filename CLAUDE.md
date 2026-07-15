@@ -39,10 +39,29 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
 - Data reads use the Supabase JS client (`web/src/useWatchlist.js`) against the
   same Postgres the collectors write; UI stays **READ-only**. Prices are
   already ILS-converted by the collector — the UI never divides by 100 again.
-- **Auth-uid ↔ users mapping is not wired yet:** `watchlist.user_id` points at
-  our own `users` table, not the Supabase Auth uid. The watchlist currently
-  reads the seeded **"owner"** user (`OWNER_USERNAME` in `useWatchlist.js`) as a
-  stand-in — a TODO to map properly so each user sees their own list.
+- **Auth model — shared pool, personal watchlist.** `watchlist.user_id`
+  references **our own `users` table** (integer id), NOT the Supabase Auth uid;
+  **`users.auth_uid`** (uuid, nullable, unique) bridges the two. Every UI
+  read/write resolves `auth.uid()` → `users.id` through it
+  (`useWatchlist(authUser)`, which self-provisions a users row on first login,
+  keyed on auth_uid). `auth_uid` is **nullable on purpose** — `seed.py` and
+  `init_db`'s `DESK_DEFAULT_USER` create users by username with no auth account.
+  Do **not** "simplify" this by making `watchlist.user_id` the auth uuid: it
+  would break both of those (they map username → integer id) and require a
+  destructive type change on a live FK'd column.
+- **The watchlist is the ONLY personal table.** `securities`, `quotes`,
+  `price_history`, `news`, `emails`, `filings`, `tase_securities` are the
+  **shared pool** — readable by every authenticated user, and `securities`
+  INSERT is deliberately open to authenticated (adding a security is a global
+  act; the collectors then gather for everyone). What's personal is the
+  *watchlist row*, which RLS locks to its owner
+  (`user_id in (select id from users where auth_uid = auth.uid())` for
+  SELECT/INSERT/DELETE — see `sql/6b-1_per_user_auth_rls.sql`). The UI's own
+  filtering is convenience, **not** the boundary — RLS is.
+- **Collectors are unaffected by auth** and must stay that way: they join
+  `watchlist` on `sec_id` and never reference `user_id`, so they always operate
+  on the **union of every user's watchlist**; they also connect as the table
+  owner, which bypasses RLS.
 - **RLS is the gotcha for every table the UI reads.** The collectors created
   these tables via raw SQL; the Supabase `anon` role reading them via PostgREST
   is subject to RLS. **`GRANT SELECT` does NOT bypass RLS** — with RLS enabled

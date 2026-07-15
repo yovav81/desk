@@ -265,9 +265,45 @@
             error). Same trap still open on `news`/`emails`/`filings` — until
             those have policies the detail feed will look empty too.
       - [ ] Not visually verified in a browser (no browser here) — worth a look.
-- [ ] Step 6 — polish: draggable panel divider, sticky name column, mobile
-      layout, Vercel deploy (add the deployed origin to ALLOWED_ORIGIN_RE in
-      the Edge Function when it lands).
+- [x] Step 6b-1 — per-user auth + tight watchlist RLS — DONE (2026-07-15).
+      Closes the TODO(auth-mapping) open since step 2 **and** the hole where any
+      logged-in user could read/modify any watchlist.
+      **Design: (a) `users.auth_uid`** (uuid, nullable, unique) bridging
+      auth.uid() -> users.id — chosen over (b) "watchlist.user_id = auth uuid"
+      because (a) is purely additive/idempotent, preserves the seeded rows and
+      the FK, and keeps `desk/seed.py` + `init_db`'s DESK_DEFAULT_USER seeding
+      working (both map by username -> integer id, which (b) would break along
+      with a destructive Integer->UUID type change on a live FK'd table).
+      Nullable = users rows without a login stay valid (seed/collectors);
+      unique = one auth account can never map to two rows (NULLs stay distinct).
+      desk/db.py: column + idempotent ALTER (UUID on PG, CHAR(32) on SQLite) +
+      `CREATE UNIQUE INDEX IF NOT EXISTS uq_users_auth_uid`.
+      web/: `useWatchlist(authUser)` resolves the session user's users.id (and
+      self-provisions a row on first login, keyed on auth_uid so tabs/re-logins
+      never duplicate); the hardcoded 'owner' is gone. Effect deps are the
+      primitive uid/email, not the session object (which Supabase replaces on
+      every token refresh).
+      **Collectors unaffected** — verified they join watchlist on sec_id and
+      never reference user_id, so the union across all users is unchanged; they
+      also connect as the table owner, which bypasses RLS.
+      Verified on a throwaway SQLite built with the OLD schema + data: migration
+      adds auth_uid and preserves the owner + 3 watchlist rows, init_db is
+      idempotent (3x, no loss), multiple unlinked users allowed, duplicate
+      auth_uid rejected, collector union spans all users and de-dupes overlaps,
+      fresh create_all includes the column. Frontend build + oxlint clean.
+      - [ ] **RUN `sql/6b-1_per_user_auth_rls.sql`** — section 1 (link 'owner'
+            to the auth account) must run BEFORE the next UI login, or first
+            login provisions a new empty user and the watchlist looks empty
+            (section 6 recovers). Sections 2-3 replace the using(true) policies.
+      - [ ] `securities` INSERT stays open to authenticated **by design** —
+            adding a security is a shared/global act; what's personal is the
+            watchlist row, now locked.
+      - [ ] Browser test after the SQL: my rows still there; a 2nd test user
+            sees an EMPTY watchlist and none of mine.
+- [ ] Step 6b-2 — Vercel deploy (add the deployed origin to ALLOWED_ORIGIN_RE
+      in the Edge Function when it lands).
+- [ ] Step 6c — UI polish: draggable panel divider, sticky name column, mobile
+      layout.
 
 ## Open items (carried over)
 - [ ] Decide bond price source (DataHub paid EOD vs manual tier) — manual

@@ -20,6 +20,7 @@ from sqlalchemy import (
     Table,
     Text,
     UniqueConstraint,
+    Uuid,
     create_engine,
     func,
     inspect,
@@ -29,11 +30,18 @@ from sqlalchemy.engine import make_url
 
 metadata = MetaData()
 
+# `auth_uid` links our own users row to the Supabase Auth user (auth.users.id).
+# It is what makes per-user RLS possible: watchlist policies resolve
+# auth.uid() -> users.id through this column. NULLABLE on purpose — the
+# collectors and seed.py create users by username with no auth account, and a
+# users row without a login is still valid. UNIQUE so one auth account can never
+# map to two users rows (NULLs stay distinct, so many unlinked rows are fine).
 users = Table(
     "users",
     metadata,
     Column("id", Integer, primary_key=True),
     Column("username", String(255), nullable=False, unique=True),
+    Column("auth_uid", Uuid(as_uuid=False), nullable=True, unique=True),
     Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
 )
 
@@ -240,6 +248,20 @@ def _migrate(engine) -> None:
     """Idempotent additive migrations for DBs created before newer columns existed."""
     insp = inspect(engine)
     tables = insp.get_table_names()
+    if "users" in tables:
+        user_cols = {c["name"] for c in insp.get_columns("users")}
+        if "auth_uid" not in user_cols:
+            # Uuid() renders UUID on Postgres and CHAR(32) elsewhere; the raw
+            # ALTER has to make the same choice by hand. Existing rows get NULL
+            # (unlinked) — no data is touched, and the seeded 'owner' keeps its
+            # watchlist. Linking it to a real auth user is a one-line UPDATE
+            # (see TODO 6b-1).
+            col_type = "UUID" if engine.dialect.name == "postgresql" else "CHAR(32)"
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE users ADD COLUMN auth_uid {col_type}"))
+                # NULLs are distinct in a unique index on both backends, so any
+                # number of unlinked users rows coexist.
+                conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_users_auth_uid ON users (auth_uid)"))
     if "securities" in tables:
         cols = {c["name"] for c in insp.get_columns("securities")}
         with engine.begin() as conn:
