@@ -178,6 +178,30 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   **US (SEC) + Yahoo global merged**, de-duped by bare symbol (US wins its
   GLOBAL twin). See research/GLOBAL_COVERAGE_FINDINGS.md +
   ONBOARDING_GLOBAL_VALIDATION.md.
+- **Search proxy Edge Function** (`supabase/functions/search/index.ts`, Deno/TS)
+  — the UI's live search for **Yahoo (global) + SEC (US) ONLY**. **Israel is
+  deliberately not in it**: the UI queries the local `tase_securities` table
+  directly (instant, no live gate). The proxy exists because the browser
+  *cannot* call these upstreams: Yahoo sends **no CORS** headers and 429s
+  without a `User-Agent`; SEC 403s without a **descriptive contact UA** — both
+  headers a browser may not set. Rules: the caller's **`Origin` is never
+  forwarded** upstream (request headers are built from scratch); the SEC
+  `company_tickers.json` (~800 KB) is fetched **once and cached in module
+  scope** (24h TTL + in-flight dedupe) — never per keystroke; results are
+  merged/de-duped by full symbol (US wins its GLOBAL twin) and **never
+  auto-picked** — always a list, per the collision policy in
+  research/GLOBAL_COVERAGE_FINDINGS.md. Fail-soft: one dead upstream returns the
+  other's results plus a `notes[]` entry, never a 500. **Ranking is
+  intentionally NOT a copy of `onboarding.py`'s**: SEC hits are scored (exact
+  ticker > query-starts-a-word > ticker prefix > loose substring) and the merge
+  **interleaves** US/GLOBAL — plain concatenation + substring matching buried
+  `SAP.DE` under `CHESAPEAKE` (which contains "sap"). CORS is an **allowlist**
+  (localhost any port + `*.vercel.app`) — add the real app origin on deploy.
+  **JWT verification stays ON** (callers pass the public anon key) — this is not
+  an open proxy, and **no secrets belong in the function code**. Not a port of
+  the Python engine — `desk/onboarding.py` remains the resolver/validator.
+  Deploy: `npx supabase@latest functions deploy search` (CLI is **not
+  installed**; use `npx`, and note `npm i -g supabase` is unsupported by design).
 - **Sub-unit currency ÷100** lives in one place, `collect_prices.normalize_currency()`:
   `ILA→ILS`, `GBp→GBP`, `GBX→GBP` (agorot/pence), everything else unscaled.
   `currency_for()` round-trips the stored major currency back to the native

@@ -152,8 +152,32 @@
       registered name (`longName`, e.g. "בנק לאומי לישראל בע\"מ") so "בנק"
       search now returns the major banks (was only 1). Daily workflow retained
       (sweep ~10 min).
-- [ ] Step 4b-2 — Edge Function for Yahoo (global) + SEC (US) live search
-      (CORS proxy; browser can't call them directly).
+- [x] Step 4b-2 — Edge Function for Yahoo (global) + SEC (US) live search
+      (CORS proxy; browser can't call them directly) — DONE (2026-07-15).
+      supabase/functions/search/index.ts (Deno/TS): thin proxy, NOT a port of
+      the Python engine. Yahoo search EQUITY-filtered (browser UA) + SEC
+      company_tickers.json fetched once and cached in module scope (24h TTL,
+      in-flight dedupe — never per keystroke); upstream headers built from
+      scratch (caller's Origin never forwarded); CORS allowlist =
+      localhost/127.0.0.1 any port + *.vercel.app; JWT verification left ON
+      (anon key required — not an open proxy). Israel deliberately excluded
+      (tase_securities is queried directly by the UI); Hebrew queries return a
+      note. Never auto-picks — always a candidate list.
+      Verified locally under Deno against LIVE upstreams: SAP → SAP (US) +
+      SAP.DE + SAP.TO (collisions preserved), AAPL/apple/nestle → NESN.SW,
+      Hebrew → local-table note, empty q → 400, preflight + disallowed origin
+      (ACAO null) correct, and fail-soft proven with a broken SEC URL (HTTP 200,
+      Yahoo results + note).
+      **Ranking is deliberately NOT a copy of onboarding.py's:** SEC matches are
+      scored (exact ticker > query-starts-a-word-in-name > ticker prefix > loose
+      substring) and the merge INTERLEAVES US/GLOBAL. Straight concatenation +
+      substring matching let junk (CHESAPEAKE contains "sap") fill all 8 slots
+      and drop SAP.DE entirely.
+      - [ ] **Not yet deployed/verified from the cloud** — needs `supabase login`
+            + `link` (browser step). The deploy also answers the open
+            datacenter-IP question from EDGE_SEARCH_FINDINGS.md for Yahoo/SEC.
+      - [ ] Add the real app origin to ALLOWED_ORIGIN_RE when the UI is
+            deployed (Vercel step).
 - [ ] Step 4b-3 — search + picker + add/remove security in the UI, over the
       onboarding engine (suggest/resolve/add_to_db) + tase_securities for
       instant Israeli search.
