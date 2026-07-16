@@ -21,6 +21,7 @@ Dedup guard: filings UNIQUE(source, maya_id) — safe to re-run on a cron.
 import json
 import logging
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
@@ -37,6 +38,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("collect_maya")
 
 PAGE_LIMIT = 20
+# MAYA publishes in Israel local time. DST-aware by design — see _parse_published.
+MAYA_TZ = ZoneInfo("Asia/Jerusalem")
 
 
 def watchlisted_tase_securities(engine) -> list[dict]:
@@ -52,13 +55,30 @@ def watchlisted_tase_securities(engine) -> list[dict]:
 
 
 def _parse_published(raw) -> datetime | None:
+    """MAYA publishDate -> true UTC. THE ONLY PLACE THIS CONVERSION HAPPENS.
+
+    WHY THIS ISN'T UTC: MAYA sends a NAIVE local timestamp with no zone at all —
+    e.g. "2026-07-13T17:29:02.88" means 17:29 in Tel Aviv. Stamping UTC onto it
+    (which this function used to do) stored every filing ~3h in the future;
+    proven in production by a row stored as 2026-07-02 23:25:00+00, i.e. 02:25
+    Israel local — MAYA does not publish at 2am. See research/FRESHNESS_FINDINGS.md.
+
+    Asia/Jerusalem, never a fixed offset: Israel is UTC+3 (IDT) in summer and
+    UTC+2 (IST) in winter. A hardcoded -3 would be wrong half the year — the same
+    class of bug this fixes.
+    """
     if not raw:
         return None
     try:
-        # e.g. "2026-07-13T17:29:02.88" (naive, Israel local) — store as-is UTC-tagged.
-        return datetime.fromisoformat(raw).replace(tzinfo=timezone.utc)
+        dt = datetime.fromisoformat(raw)
     except (TypeError, ValueError):
         return None
+    if dt.tzinfo is None:
+        # The normal case: naive == Israel local.
+        dt = dt.replace(tzinfo=MAYA_TZ)
+    # If MAYA ever starts sending a real offset, trust it — unlike SEC, it has
+    # never been observed mislabelling one.
+    return dt.astimezone(timezone.utc)
 
 
 def fetch_company_reports(session, company_id: int) -> list[dict] | None:
@@ -122,12 +142,21 @@ def collect() -> None:
                 title = r.get("title")
                 if maya_id is None or not title:
                     continue  # skip malformed row, keep going
+                published = _parse_published(r.get("publishDate"))
+                if published is None:
+                    # Never fabricate a time: skip and say so, rather than storing
+                    # a NULL date that would sort to the bottom of the feed forever.
+                    log.warning(
+                        "%s: filing %s has an unusable publishDate %r — skipped",
+                        sec["sec_id"], maya_id, r.get("publishDate"),
+                    )
+                    continue
                 stmt = insert_ignore(engine, filings, ["source", "maya_id"]).values(
                     sec_id=sec["sec_id"],
                     source="maya",
                     maya_id=maya_id,
                     title=title,
-                    published_at=_parse_published(r.get("publishDate")),
+                    published_at=published,
                     doc_url=doc_url_from_attachments(r.get("attachments")),
                 )
                 if conn.execute(stmt).rowcount:

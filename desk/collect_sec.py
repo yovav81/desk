@@ -34,6 +34,7 @@ import time
 import urllib.error
 import urllib.request
 from datetime import date, datetime, time as dtime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
@@ -48,6 +49,9 @@ SUBMISSIONS_URL = "https://data.sec.gov/submissions/{path}.json"
 # securities this is a formality, but stay well under it.
 REQUEST_DELAY = 0.2
 LOOKBACK_DAYS = 90
+# EDGAR timestamps are US/Eastern despite the 'Z' label. DST-aware by design —
+# see _parse_published.
+SEC_TZ = ZoneInfo("America/New_York")
 
 # Hebrew label per form. Rendered as "<label> (<form>)"; amendments append the
 # suffix below. SAP SE is a foreign private issuer — it files 20-F/6-K and never
@@ -124,19 +128,42 @@ def doc_url_for(cik: int, accession_no: str, primary_document: str) -> str:
 
 
 def _parse_published(acceptance: str | None, filing_date: str | None) -> datetime | None:
-    """Prefer acceptanceDateTime (carries a real time); fall back to filingDate
-    at midnight UTC. Returns None if neither parses — the caller then skips the
-    filing rather than inventing a date."""
+    """SEC acceptanceDateTime/filingDate -> true UTC. THE ONLY PLACE THIS
+    CONVERSION HAPPENS. Returns None if neither parses — the caller then skips
+    the filing rather than inventing a date.
+
+    *** WHY WE IGNORE THE 'Z': THE SOURCE LIES. ***
+    submissions JSON reports acceptanceDateTime as '2026-07-15T18:11:47.000Z',
+    but the value is EDGAR's US/Eastern wall clock, NOT UTC. Measured: for
+    accession 0000897101-26-000333 the EDGAR getcurrent ATOM feed reported
+    '2026-07-15T18:11:47-04:00' — the same wall clock to the second, with the
+    real Eastern offset — and the filing was 0.6 min old at 22:12 UTC, which
+    only fits 18:11 EASTERN. Trusting the 'Z' stored every filing 4h early;
+    proven in production by a BAC 8-K stored as 2026-07-14 10:45:08+00 = 06:45
+    New York, before the market opened. See research/FRESHNESS_FINDINGS.md §A2.
+
+    So: strip the (false) zone label, read the wall clock as America/New_York,
+    convert to real UTC. Do NOT "fix" this back to trusting the Z.
+
+    America/New_York, never a fixed offset: EDGAR is Eastern, which is UTC-4
+    (EDT) in summer and UTC-5 (EST) in winter. A hardcoded -4 would be wrong
+    every winter — the same class of bug this fixes.
+    """
     if acceptance:
         try:
-            # ISO 8601; may carry 'Z', which fromisoformat rejects before 3.11.
-            return datetime.fromisoformat(acceptance.replace("Z", "+00:00"))
+            dt = datetime.fromisoformat(str(acceptance).replace("Z", "").replace("z", ""))
+            # Any zone label here is untrustworthy (see above) — drop it and
+            # re-read the wall clock as Eastern.
+            return dt.replace(tzinfo=SEC_TZ).astimezone(timezone.utc)
         except (TypeError, ValueError):
             pass
     if filing_date:
         try:
+            # Fallback: date only, no time. Midnight EASTERN — filingDate is an
+            # EDGAR calendar date, so midnight UTC would place it at 20:00 the
+            # PREVIOUS day in New York.
             d = datetime.strptime(filing_date, "%Y-%m-%d").date()
-            return datetime.combine(d, dtime.min, tzinfo=timezone.utc)
+            return datetime.combine(d, dtime.min, tzinfo=SEC_TZ).astimezone(timezone.utc)
         except (TypeError, ValueError):
             pass
     return None
