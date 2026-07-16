@@ -45,6 +45,12 @@ jobs:
       - name: Collect email
         run: python -m desk.collect_email
 
+      # BEFORE prices, so a just-added TASE security gets its ticker and its
+      # first quote in the SAME run. Steady state (nothing to enrich) makes
+      # zero Yahoo requests. --commit is required: the CLI defaults to dry-run.
+      - name: Enrich TASE tickers
+        run: python -m desk.collect_enrich --commit
+
       - name: Collect prices
         run: python -m desk.collect_prices
 
