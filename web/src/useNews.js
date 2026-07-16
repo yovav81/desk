@@ -44,7 +44,7 @@ const mapFiling = (f) => ({
   ts: f.published_at,
 });
 
-export function useNews() {
+export function useNews(refreshTick) {
   const [items, setItems] = useState([]);
   const [status, setStatus] = useState('loading'); // loading | ready | error
   const [error, setError] = useState('');
@@ -83,7 +83,10 @@ export function useNews() {
     return () => {
       cancelled = true;
     };
-  }, []);
+    // refreshTick re-runs the fetch (auto-refresh). load() never sets status
+    // back to 'loading', so a refetch swaps items in without a flicker; the
+    // cancelled guard drops a superseded fetch.
+  }, [refreshTick]);
 
   return { items, status, error };
 }

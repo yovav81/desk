@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { theme as t } from './theme';
 import { useNews } from './useNews';
 import { FeedItem, Notice } from './FeedItem';
-import { tsValue } from './format';
+import { fmtRelative, tsValue } from './format';
 
 // Left panel: unified feed of four source types with three filter tabs.
 // READ-ONLY. Watchlist sec_ids come in as a prop (reused from the watchlist
@@ -15,9 +15,22 @@ const TABS = [
   { key: 'all', label: 'הכל' },
 ];
 
-export default function News({ watchSecIds = [], secLabels = {}, watchReady = true }) {
-  const { items, status, error } = useNews();
+export default function News({ watchSecIds = [], secLabels = {}, watchReady = true, refreshTick }) {
+  const { items, status, error } = useNews(refreshTick);
   const [tab, setTab] = useState('all'); // default: הכל
+
+  // Freshness readout: the timestamp of the NEWEST item across the whole feed
+  // (not the active tab) — i.e. how recent our data is. Deliberately NOT "when
+  // the browser fetched": that would read "עכשיו" forever. Derived from ts
+  // already fetched; no extra query. null when there's nothing to time.
+  const lastUpdated = useMemo(() => {
+    let max = 0;
+    for (const it of items) {
+      const v = tsValue(it.ts);
+      if (v > max) max = v;
+    }
+    return max || null;
+  }, [items]);
 
   const shown = useMemo(() => {
     const watch = new Set(watchSecIds);
@@ -55,7 +68,12 @@ export default function News({ watchSecIds = [], secLabels = {}, watchReady = tr
           flexWrap: 'wrap',
         }}
       >
-        <div style={{ fontSize: 16, fontWeight: 700 }}>חדשות</div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+          <div style={{ fontSize: 16, fontWeight: 700 }}>חדשות</div>
+          {status === 'ready' && lastUpdated && (
+            <div style={{ fontSize: 12, color: t.mut }}>הפריט האחרון: {fmtRelative(lastUpdated)}</div>
+          )}
+        </div>
         <div style={{ display: 'flex', gap: 6 }}>
           {TABS.map((tb) => {
             const active = tab === tb.key;

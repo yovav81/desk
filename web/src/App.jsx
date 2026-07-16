@@ -174,16 +174,40 @@ function Field({ label, ...props }) {
   );
 }
 
+const REFRESH_MS = 3 * 60 * 1000; // slow poll — collectors write every 74-128 min
+
 function Dashboard({ session }) {
+  // Bumped to trigger a refetch; threaded into the data hooks' effect deps so a
+  // single timer drives both (no duplicate timers, no duplicated query logic).
+  const [refreshTick, setRefreshTick] = useState(0);
   // The logged-in auth user drives the watchlist — no hardcoded 'owner'.
-  const wl = useWatchlist(session.user);
+  const wl = useWatchlist(session.user, refreshTick);
   // Which security's detail page is open (null = the dashboard). One page, so
   // plain state beats pulling in a router.
   const [openSecId, setOpenSecId] = useState(null);
+
+  // Auto-refresh: refetch when the tab regains visibility, plus a slow interval
+  // as a backstop for a tab left open. Gated on visibilityState so a hidden tab
+  // issues zero requests (free-tier friendly). One interval + one listener,
+  // both torn down on unmount — no leak, no stacking.
+  useEffect(() => {
+    const bump = () => {
+      if (document.visibilityState === 'visible') setRefreshTick((n) => n + 1);
+    };
+    document.addEventListener('visibilitychange', bump);
+    const id = setInterval(bump, REFRESH_MS);
+    return () => {
+      document.removeEventListener('visibilitychange', bump);
+      clearInterval(id);
+    };
+  }, []);
   const watchSecIds = wl.rows.map((r) => r.sec_id);
-  // sec_id -> short label (symbol) for the news security tags. Every displayed
-  // feed item with a sec_id is a watchlist security, so this map covers them.
-  const secLabels = Object.fromEntries(wl.rows.map((r) => [r.sec_id, r.symbol || r.sec_id]));
+  // sec_id -> label for the news security tags. Prefer the registered name
+  // (securities.name — already fetched), so a TASE tag reads "בנק לאומי לישראל
+  // בע\"מ", not the bare number 604611. Fall back to symbol then sec_id so a
+  // security missing its name never renders blank. Every displayed feed item
+  // with a sec_id is a watchlist security, so this map covers them.
+  const secLabels = Object.fromEntries(wl.rows.map((r) => [r.sec_id, r.name || r.symbol || r.sec_id]));
 
   async function onLogout() {
     await supabase.auth.signOut();
@@ -255,7 +279,7 @@ function Dashboard({ session }) {
         </div>
         <div style={{ width: 1, background: t.bd, flexShrink: 0 }} />
         <div style={{ flex: 1, display: 'flex', minWidth: 0, minHeight: 0 }}>
-          <News watchSecIds={watchSecIds} secLabels={secLabels} watchReady={wl.status === 'ready'} />
+          <News watchSecIds={watchSecIds} secLabels={secLabels} watchReady={wl.status === 'ready'} refreshTick={refreshTick} />
         </div>
       </div>
     </div>

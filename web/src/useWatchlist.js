@@ -44,7 +44,7 @@ async function resolveUserId(user) {
 // raw-SQL-created tables — so an embed yields 0 usable rows with no error.
 // We instead mirror the known-good SQL: fetch watchlist sec_ids for the user,
 // then securities + quotes for those ids, and merge on sec_id in JS.
-export function useWatchlist(authUser) {
+export function useWatchlist(authUser, refreshTick) {
   const [rows, setRows] = useState([]);
   const [status, setStatus] = useState('loading'); // loading | ready | error
   const [error, setError] = useState('');
@@ -124,9 +124,11 @@ export function useWatchlist(authUser) {
     };
     // Depend on the primitive uid/email, not the session object: Supabase hands
     // back a NEW session object on every token refresh, which would otherwise
-    // refetch the whole watchlist roughly hourly for no reason.
+    // refetch the whole watchlist roughly hourly for no reason. refreshTick is a
+    // deliberate refetch trigger (auto-refresh); load() doesn't reset status to
+    // 'loading', so a refetch updates rows in place without a flicker.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authUser?.id, authUser?.email]);
+  }, [authUser?.id, authUser?.email, refreshTick]);
 
   // --- add ----------------------------------------------------------------
   // SHALLOW insert only. The browser deliberately does NOT resolve prices or
