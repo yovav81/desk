@@ -2,7 +2,9 @@ name: collect
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    # Every 15 minutes, phase-shifted +7 off the :00/:15/:30/:45 congestion
+    # peaks (and off filings.yml's +3 lane). Filings run in filings.yml.
+    - cron: "7,22,37,52 * * * *"
   workflow_dispatch: {}
 
 concurrency:
@@ -17,7 +19,6 @@ jobs:
       DESK_DEFAULT_USER: ${{ secrets.DESK_DEFAULT_USER }}
       GMAIL_USER: ${{ secrets.GMAIL_USER }}
       GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
     steps:
       - uses: actions/checkout@v4
 
@@ -27,9 +28,6 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
-
-      - name: Install Chromium (for MAYA cookie harvest)
-        run: python -m playwright install --with-deps chromium
 
       - name: Require DESK_DB_URL
         run: |
@@ -50,10 +48,5 @@ jobs:
       - name: Collect prices
         run: python -m desk.collect_prices
 
-      # One cookie harvest per run; fail-soft if the Imperva gate blocks this IP.
-      - name: Collect MAYA filings
-        run: python -m desk.collect_maya
-
-      # --commit is required: the CLI defaults to dry-run.
-      - name: Collect SEC filings
-        run: python -m desk.collect_sec --commit
+      # MAYA + SEC filings moved to .github/workflows/filings.yml (5-min fast
+      # lane) — running them here too would double-poll MAYA and burn queue slots.
