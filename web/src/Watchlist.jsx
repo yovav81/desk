@@ -28,8 +28,25 @@ const GRID =
 
 const mono = "'IBM Plex Mono', monospace";
 
+// Edge shadows for the sticky cells, shown ONLY while x-scrolled so the
+// unscrolled view stays pixel-equal to the pre-sticky layout. PHYSICAL values
+// on purpose: box-shadow has no logical form, and the app is RTL-only
+// (<html dir="rtl">) — the name cell sits at the RIGHT and casts LEFT
+// (its inline-end); the ✕ cell sits at the LEFT and casts RIGHT.
+const SHADOW_NAME_EDGE = '-8px 0 8px -8px rgba(0, 0, 0, 0.55)';
+const SHADOW_REMOVE_EDGE = '8px 0 8px -8px rgba(0, 0, 0, 0.55)';
+
 export default function Watchlist({ rows = [], status = 'loading', error = '', onAdd, onRemove, onOpen }) {
   const existingIds = rows.map((r) => r.sec_id);
+  // True while the table is horizontally scrolled — gates the sticky cells'
+  // edge shadow so the UNscrolled (incl. full-width) view stays pixel-equal to
+  // the pre-sticky layout. Math.abs: in RTL, browsers report leftward scroll
+  // as NEGATIVE scrollLeft. React no-ops setState on an unchanged boolean, so
+  // this is cheap even though vertical scrolling also fires the handler.
+  const [xScrolled, setXScrolled] = useState(false);
+  function onTableScroll(e) {
+    setXScrolled(Math.abs(e.currentTarget.scrollLeft) > 1);
+  }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
       <div style={{ padding: '18px 24px 12px', display: 'flex', alignItems: 'baseline', gap: 10 }}>
@@ -51,11 +68,21 @@ export default function Watchlist({ rows = [], status = 'loading', error = '', o
       {status === 'ready' && rows.length === 0 && <Notice title="אין ניירות ברשימה" />}
 
       {status === 'ready' && rows.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-          <HeaderRow />
-          <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflowY: 'auto', minHeight: 0 }}>
+        // ONE shared scroller for BOTH axes: header + rows live inside it, so
+        // they x-scroll together (kills the header-bleed bug where the header
+        // stayed in flow while rows scrolled). The header keeps its old
+        // "fixed above the rows" feel via position:sticky top:0.
+        <div onScroll={onTableScroll} style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+          {/* ALIGNMENT GUARANTEE: header and every row share the same GRID
+              template AND stretch to this wrapper's width (flex column,
+              default align-stretch). minWidth:'min-content' makes the wrapper
+              at least as wide as the widest child's track floors, so all
+              children resolve identical track sizes — they cannot misalign,
+              because neither the template nor the available width can differ. */}
+          <div style={{ minWidth: 'min-content', display: 'flex', flexDirection: 'column' }}>
+            <HeaderRow xScrolled={xScrolled} />
             {rows.map((sec) => (
-              <Row key={sec.sec_id} sec={sec} onRemove={onRemove} onOpen={onOpen} />
+              <Row key={sec.sec_id} sec={sec} onRemove={onRemove} onOpen={onOpen} xScrolled={xScrolled} />
             ))}
           </div>
         </div>
@@ -64,7 +91,7 @@ export default function Watchlist({ rows = [], status = 'loading', error = '', o
   );
 }
 
-function HeaderRow() {
+function HeaderRow({ xScrolled }) {
   const cell = { textAlign: 'left', fontSize: 11, color: t.mut };
   return (
     <div
@@ -77,9 +104,28 @@ function HeaderRow() {
         fontSize: 11,
         color: t.mut,
         borderBottom: `1px solid ${t.bd}`,
+        // The header lives INSIDE the shared scroller now; sticky top keeps its
+        // old fixed-above-the-rows behaviour while y-scrolling. Opaque bg so
+        // rows never show through. zIndex 2 = above the rows' sticky cells (1).
+        position: 'sticky',
+        top: 0,
+        zIndex: 2,
+        background: t.bg,
       }}
     >
-      <div>נייר</div>
+      {/* Corner cell: sticky on BOTH axes (top via the parent, inline via
+          itself). insetInlineStart resolves to RIGHT under dir=rtl. */}
+      <div
+        style={{
+          position: 'sticky',
+          insetInlineStart: 0,
+          zIndex: 1,
+          background: t.bg,
+          boxShadow: xScrolled ? SHADOW_NAME_EDGE : 'none',
+        }}
+      >
+        נייר
+      </div>
       <div style={cell}>מחיר</div>
       <div style={cell}>יומי</div>
       {RET_KEYS.map((r) => (
@@ -87,12 +133,22 @@ function HeaderRow() {
           {r.label}
         </div>
       ))}
-      <div />
+      {/* The ✕ column's header slot — sticky at the opposite edge, like the
+          cells below it, so the corner stays clean while x-scrolling. */}
+      <div
+        style={{
+          position: 'sticky',
+          insetInlineEnd: 0,
+          zIndex: 1,
+          background: t.bg,
+          boxShadow: xScrolled ? SHADOW_REMOVE_EDGE : 'none',
+        }}
+      />
     </div>
   );
 }
 
-function Row({ sec, onRemove, onOpen }) {
+function Row({ sec, onRemove, onOpen, xScrolled }) {
   const [hover, setHover] = useState(false);
   const q = sec.quote;
   const manual = sec.price_source === 'manual';
@@ -119,8 +175,24 @@ function Row({ sec, onRemove, onOpen }) {
         background: hover ? t.surf2 : 'transparent',
       }}
     >
-      {/* name + sub + manual tag */}
-      <div style={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+      {/* name + sub + manual/pending tag — STICKY: never scrolls out of view.
+          insetInlineStart = RIGHT under dir=rtl. Opaque bg (it slides over the
+          other cells) must track the row's hover color or it would visibly
+          mismatch while scrolled; the edge shadow only appears when actually
+          scrolled, keeping the resting view pixel-equal to before. */}
+      <div
+        style={{
+          minWidth: 0,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          position: 'sticky',
+          insetInlineStart: 0,
+          zIndex: 1,
+          background: hover ? t.surf2 : t.bg,
+          boxShadow: xScrolled ? SHADOW_NAME_EDGE : 'none',
+        }}
+      >
         <div style={{ minWidth: 0 }}>
           <div
             dir="auto"
@@ -211,8 +283,21 @@ function Row({ sec, onRemove, onOpen }) {
         </div>
       ))}
 
-      {/* remove — watchlist row only; the security and its news/filings stay */}
-      <div style={{ textAlign: 'center' }}>
+      {/* remove — watchlist row only; the security and its news/filings stay.
+          Sticky at the OPPOSITE edge (insetInlineEnd = LEFT in RTL): removing a
+          security must never require scrolling back, and since this column
+          already sits at the far left, pinning it changes nothing at full
+          width. The ידני/pending tag travels with the name cell above. */}
+      <div
+        style={{
+          textAlign: 'center',
+          position: 'sticky',
+          insetInlineEnd: 0,
+          zIndex: 1,
+          background: hover ? t.surf2 : t.bg,
+          boxShadow: xScrolled ? SHADOW_REMOVE_EDGE : 'none',
+        }}
+      >
         <RemoveButton
           onClick={(e) => {
             // The row opens the detail page; the × must not do both.
