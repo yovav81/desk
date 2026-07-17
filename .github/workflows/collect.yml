@@ -58,3 +58,14 @@ jobs:
 
       # MAYA + SEC filings moved to .github/workflows/filings.yml (5-min fast
       # lane) — running them here too would double-poll MAYA and burn queue slots.
+
+      # Dead-man ping — MUST stay the LAST step and MUST NOT get `if: always()`:
+      # with no continue-on-error above, it runs only when every collector
+      # succeeded, so a red run = no ping = Healthchecks alert (silence itself
+      # is the alarm). `|| true`: a Healthchecks hiccup at worst delays one
+      # alert; failing a green run over a monitoring blip would invert the
+      # dependency. -fsS: fail on HTTP errors, silent, no URL in logs.
+      - name: Ping healthcheck
+        env:
+          HC_PING_COLLECT: ${{ secrets.HC_PING_COLLECT }}
+        run: curl -fsS -m 10 --retry 3 "$HC_PING_COLLECT" > /dev/null || true

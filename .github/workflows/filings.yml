@@ -67,3 +67,16 @@ jobs:
       # --commit is required: the CLI defaults to dry-run.
       - name: Collect SEC filings
         run: python -m desk.collect_sec --commit
+
+      # Dead-man ping — MUST stay the LAST step and MUST NOT get `if: always()`:
+      # with no continue-on-error above, it runs only when every collector
+      # succeeded, so a red run = no ping = Healthchecks alert. That inversion
+      # (silence itself is the alarm) is the whole point — pg_cron dead, PAT
+      # expired, workflow broken, runner outage all collapse into "no ping".
+      # `|| true`: if Healthchecks itself hiccups, at worst one alert is
+      # delayed; failing a green run over a monitoring blip would invert the
+      # dependency. -fsS: fail on HTTP errors, silent, no URL in logs.
+      - name: Ping healthcheck
+        env:
+          HC_PING_FILINGS: ${{ secrets.HC_PING_FILINGS }}
+        run: curl -fsS -m 10 --retry 3 "$HC_PING_FILINGS" > /dev/null || true
