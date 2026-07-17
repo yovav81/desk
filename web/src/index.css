@@ -39,3 +39,41 @@ input::placeholder {
     transform: none;
   }
 }
+
+/* Panel split divider (App.jsx SplitDivider): a 9px grab strip with a 1px
+   visual line centered. Colors mirror web/src/theme.js (bd + accDim) —
+   hardcoded here like the scrollbar colors above, since CSS can't import
+   theme.js. The gold line on hover/focus doubles as the focus indicator. */
+.split-divider {
+  flex-shrink: 0;
+  width: 9px;
+  display: flex;
+  justify-content: center;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+.split-divider-line {
+  width: 1px;
+  background: #1d2b47; /* theme.bd */
+}
+.split-divider:hover .split-divider-line,
+.split-divider:focus-visible .split-divider-line {
+  width: 2px;
+  background: rgba(212, 175, 55, 0.35); /* theme.accDim */
+}
+/* Desktop-only: below the design's mobile breakpoint the divider degrades to
+   the old inert 1px separator — same look as before this feature existed.
+   (The mobile build will replace this with conditional rendering.) */
+@media (max-width: 760px) {
+  .split-divider {
+    width: 1px;
+    pointer-events: none;
+    cursor: default;
+  }
+  .split-divider:hover .split-divider-line,
+  .split-divider:focus-visible .split-divider-line {
+    width: 1px;
+    background: #1d2b47;
+  }
+}

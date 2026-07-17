@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { supabase } from './supabaseClient';
 import { theme as t } from './theme';
 import Watchlist from './Watchlist';
@@ -176,6 +176,76 @@ function Field({ label, ...props }) {
 
 const REFRESH_MS = 3 * 60 * 1000; // slow poll — collectors write every 74-128 min
 
+// Panel split bounds: the watchlist may occupy 25%–75% of the row. ONE clamp
+// shared by the drag and keyboard paths.
+const SPLIT_MIN = 25;
+const SPLIT_MAX = 75;
+const clampSplit = (pct) => Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, pct));
+
+// Draggable boundary between the panels. Desktop-only via CSS (index.css:
+// below 760px it degrades to the old inert 1px line). RTL-SAFE MATH: the
+// watchlist is the RIGHT panel, so its width is the distance from the pointer
+// to the container's RIGHT edge — absolute viewport geometry (clientX and
+// getBoundingClientRect ignore dir=rtl), NEVER movementX deltas, whose sign
+// conventions are the classic inverted-drag bug.
+function SplitDivider({ containerRef, pct, onResize }) {
+  // If Dashboard unmounts mid-drag (e.g. logout), don't leave text selection
+  // disabled on the whole page.
+  useEffect(() => () => {
+    document.body.style.userSelect = '';
+  }, []);
+
+  function dragTo(e) {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect || rect.width === 0) return;
+    onResize(clampSplit(((rect.right - e.clientX) / rect.width) * 100));
+  }
+
+  return (
+    <div
+      className="split-divider"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="שינוי חלוקת הפאנלים"
+      aria-valuemin={SPLIT_MIN}
+      aria-valuemax={SPLIT_MAX}
+      aria-valuenow={Math.round(pct)}
+      tabIndex={0}
+      onPointerDown={(e) => {
+        e.preventDefault();
+        // Capture routes every subsequent pointer event to this element until
+        // release — no window listeners, nothing to leak.
+        e.currentTarget.setPointerCapture(e.pointerId);
+        document.body.style.userSelect = 'none';
+      }}
+      onPointerMove={(e) => {
+        if (!e.currentTarget.hasPointerCapture(e.pointerId)) return; // hover, not drag
+        dragTo(e);
+      }}
+      onPointerUp={() => {
+        // Capture auto-releases on pointerup; just restore selection.
+        document.body.style.userSelect = '';
+      }}
+      onPointerCancel={() => {
+        document.body.style.userSelect = '';
+      }}
+      onKeyDown={(e) => {
+        // Locked mapping: the arrow points at the panel that GROWS. The
+        // watchlist sits on the RIGHT (RTL), so ArrowRight enlarges it.
+        if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          onResize(clampSplit(pct + 2));
+        } else if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          onResize(clampSplit(pct - 2));
+        }
+      }}
+    >
+      <div className="split-divider-line" />
+    </div>
+  );
+}
+
 function Dashboard({ session }) {
   // Bumped to trigger a refetch; threaded into the data hooks' effect deps so a
   // single timer drives both (no duplicate timers, no duplicated query logic).
@@ -185,6 +255,11 @@ function Dashboard({ session }) {
   // Which security's detail page is open (null = the dashboard). One page, so
   // plain state beats pulling in a router.
   const [openSecId, setOpenSecId] = useState(null);
+  // Panel split: % of the row the watchlist occupies. Component state ONLY —
+  // resets on reload by design (persisting would need a server-side per-user
+  // pref; localStorage is banned by project rule).
+  const [wlPct, setWlPct] = useState(56);
+  const splitRef = useRef(null);
 
   // Auto-refresh: refetch when the tab regains visibility, plus a slow interval
   // as a backstop for a tab left open. Gated on visibilityState so a hidden tab
@@ -266,8 +341,8 @@ function Dashboard({ session }) {
       </div>
 
       {/* content: watchlist (right, primary in RTL) + news feed (left) */}
-      <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
-        <div style={{ width: '56%', display: 'flex', minWidth: 0, minHeight: 0 }}>
+      <div ref={splitRef} style={{ flex: 1, display: 'flex', minHeight: 0 }}>
+        <div style={{ width: `${wlPct}%`, display: 'flex', minWidth: 0, minHeight: 0 }}>
           <Watchlist
             rows={wl.rows}
             status={wl.status}
@@ -277,7 +352,7 @@ function Dashboard({ session }) {
             onOpen={setOpenSecId}
           />
         </div>
-        <div style={{ width: 1, background: t.bd, flexShrink: 0 }} />
+        <SplitDivider containerRef={splitRef} pct={wlPct} onResize={setWlPct} />
         <div style={{ flex: 1, display: 'flex', minWidth: 0, minHeight: 0 }}>
           <News watchSecIds={watchSecIds} secLabels={secLabels} watchReady={wl.status === 'ready'} refreshTick={refreshTick} />
         </div>
