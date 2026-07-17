@@ -11,6 +11,9 @@ body {
   font-family: Heebo, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* The app is a fixed-height shell with internal scrollers — the BODY must
+     never scroll horizontally (RTL overflow would otherwise leak here). */
+  overflow-x: hidden;
 }
 #root {
   min-height: 100vh;
@@ -37,6 +40,32 @@ input::placeholder {
   to {
     opacity: 1;
     transform: none;
+  }
+}
+
+/* Mobile shell (App.jsx mobile tree). dvh = the VISIBLE viewport on phones —
+   100vh overshoots behind the iOS URL bar; the vh line is the fallback for
+   browsers without dvh. safe-area insets are 0 unless the page opts into
+   viewport-fit=cover (web/index.html — outside src/, see TODO), so they are a
+   harmless no-op today and correct if that lands. */
+.vh-page {
+  height: 100vh;
+  height: 100dvh;
+}
+.mobile-safe {
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.momentum {
+  -webkit-overflow-scrolling: touch;
+}
+/* iOS zooms the page when a focused input's font is under 16px. Inputs are
+   14-15px inline (SearchBox/login); !important is the only way CSS beats an
+   inline style, and it's scoped to mobile widths only. */
+@media (max-width: 760px) {
+  input {
+    font-size: 16px !important;
   }
 }
 

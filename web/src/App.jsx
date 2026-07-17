@@ -5,6 +5,7 @@ import Watchlist from './Watchlist';
 import News from './News';
 import Detail from './Detail';
 import { useWatchlist } from './useWatchlist';
+import { useIsMobile } from './useIsMobile';
 
 // STEP 5b: login + two-panel dashboard — watchlist table (right, with search +
 // add/remove) and the unified news/email/filings feed (left) with three filter
@@ -260,6 +261,11 @@ function Dashboard({ session }) {
   // pref; localStorage is banned by project rule).
   const [wlPct, setWlPct] = useState(56);
   const splitRef = useRef(null);
+  // MOBILE (<=760px, the mockup's breakpoint): one panel at a time behind two
+  // tabs. Both hooks are unconditional (React hook rules); the branch happens
+  // at the RETURN below, so the desktop tree stays byte-identical to today.
+  const isMobile = useIsMobile();
+  const [mobileTab, setMobileTab] = useState('watch');
 
   // Auto-refresh: refetch when the tab regains visibility, plus a slow interval
   // as a backstop for a tab left open. Gated on visibilityState so a hidden tab
@@ -293,6 +299,103 @@ function Dashboard({ session }) {
   const openSec = openSecId ? wl.rows.find((r) => r.sec_id === openSecId) : null;
   if (openSec) {
     return <Detail sec={openSec} onBack={() => setOpenSecId(null)} />;
+  }
+
+  // MOBILE TREE. The single branch point (here, not scattered): desktop below
+  // renders the exact tree it did before this step, divider included; mobile
+  // renders tabs + both panels. Both panels stay MOUNTED (display toggling),
+  // so flipping tabs never remounts hooks and never refetches. SplitDivider is
+  // simply absent here — which also removes its former below-760px
+  // tab-focusable wart.
+  if (isMobile) {
+    const tabs = [
+      ['watch', 'רשימת מעקב'],
+      ['news', 'חדשות'],
+    ];
+    return (
+      <div
+        className="vh-page mobile-safe"
+        style={{ display: 'flex', flexDirection: 'column', background: t.bg, color: t.txt, overflow: 'hidden' }}
+      >
+        {/* compact top bar — the email is dropped on mobile for space */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '10px 16px',
+            borderBottom: `1px solid ${t.bd}`,
+            flexShrink: 0,
+          }}
+        >
+          <Brand size={16} dotSize={9} />
+          <button
+            onClick={onLogout}
+            style={{
+              background: 'none',
+              border: `1px solid ${t.bd}`,
+              borderRadius: 8,
+              padding: '8px 16px',
+              fontSize: 13,
+              color: t.mut,
+              fontFamily: 'Heebo, sans-serif',
+              cursor: 'pointer',
+            }}
+          >
+            יציאה
+          </button>
+        </div>
+
+        {/* the two panel tabs — 48px targets, active = house gold */}
+        <div style={{ display: 'flex', flexShrink: 0, borderBottom: `1px solid ${t.bd}` }}>
+          {tabs.map(([key, label]) => {
+            const active = mobileTab === key;
+            return (
+              <button
+                key={key}
+                onClick={() => setMobileTab(key)}
+                style={{
+                  flex: 1,
+                  minHeight: 48,
+                  background: active ? t.accSoft : 'none',
+                  border: 'none',
+                  borderBottom: `2px solid ${active ? t.acc : 'transparent'}`,
+                  color: active ? t.acc : t.mut,
+                  fontSize: 15,
+                  fontWeight: 600,
+                  fontFamily: 'Heebo, sans-serif',
+                  cursor: 'pointer',
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* both panels always mounted; the inactive one is display:none */}
+        <div style={{ flex: 1, minHeight: 0, display: mobileTab === 'watch' ? 'flex' : 'none' }}>
+          <Watchlist
+            mobile
+            rows={wl.rows}
+            status={wl.status}
+            error={wl.error}
+            onAdd={wl.add}
+            onRemove={wl.remove}
+            onOpen={setOpenSecId}
+          />
+        </div>
+        <div style={{ flex: 1, minHeight: 0, display: mobileTab === 'news' ? 'flex' : 'none' }}>
+          <News
+            mobile
+            watchSecIds={watchSecIds}
+            secLabels={secLabels}
+            watchReady={wl.status === 'ready'}
+            refreshTick={refreshTick}
+          />
+        </div>
+      </div>
+    );
   }
 
   return (

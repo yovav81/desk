@@ -25,6 +25,15 @@ export function retColor(v) {
   return t.mut;
 }
 
+// Return-column keys + Hebrew labels — shared by the desktop table
+// (Watchlist.jsx) and the mobile cards (SecurityCard.jsx) so they can't drift.
+export const RET_KEYS = [
+  { key: 'mtd_pct', label: 'חודש' },
+  { key: 'qtd_pct', label: 'רבעון' },
+  { key: 'ytd_pct', label: 'שנה' },
+  { key: 'y12_pct', label: "12ח׳" },
+];
+
 // quotes.currency is authoritative and already post-conversion (ILS never ILA,
 // GBP never GBp) — trust it over the market. An unmapped currency shows its
 // code rather than a wrong symbol.

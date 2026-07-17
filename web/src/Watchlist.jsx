@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { theme as t } from './theme';
 import SearchBox from './SearchBox';
+import SecurityCard from './SecurityCard';
 import {
+  RET_KEYS,
   ccySymbol,
   displayName,
   fmtPct,
@@ -15,12 +17,8 @@ import {
 // Data comes in as props so App can fetch the watchlist once and share the
 // sec_ids with the news panel.
 
-const RET_KEYS = [
-  { key: 'mtd_pct', label: 'חודש' },
-  { key: 'qtd_pct', label: 'רבעון' },
-  { key: 'ytd_pct', label: 'שנה' },
-  { key: 'y12_pct', label: "12ח׳" },
-];
+// RET_KEYS (return-column keys+labels) lives in format.js, shared by this
+// table and the mobile cards (SecurityCard.jsx) so the two can't drift.
 
 // name | price | day | mtd | qtd | ytd | y12 | remove
 const GRID =
@@ -36,7 +34,7 @@ const mono = "'IBM Plex Mono', monospace";
 const SHADOW_NAME_EDGE = '-8px 0 8px -8px rgba(0, 0, 0, 0.55)';
 const SHADOW_REMOVE_EDGE = '8px 0 8px -8px rgba(0, 0, 0, 0.55)';
 
-export default function Watchlist({ rows = [], status = 'loading', error = '', onAdd, onRemove, onOpen }) {
+export default function Watchlist({ rows = [], status = 'loading', error = '', onAdd, onRemove, onOpen, mobile = false }) {
   const existingIds = rows.map((r) => r.sec_id);
   // True while the table is horizontally scrolled — gates the sticky cells'
   // edge shadow so the UNscrolled (incl. full-width) view stays pixel-equal to
@@ -67,7 +65,30 @@ export default function Watchlist({ rows = [], status = 'loading', error = '', o
       )}
       {status === 'ready' && rows.length === 0 && <Notice title="אין ניירות ברשימה" />}
 
-      {status === 'ready' && rows.length > 0 && (
+      {/* MOBILE: cards per the design_reference mockup (container: column,
+          gap 10, padding 6/16/16, y-scroll with momentum). The desktop branch
+          below is byte-identical to before the mobile build. */}
+      {status === 'ready' && rows.length > 0 && mobile && (
+        <div
+          className="momentum"
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 10,
+            padding: '6px 16px 16px',
+          }}
+        >
+          {rows.map((sec) => (
+            <SecurityCard key={sec.sec_id} sec={sec} onRemove={onRemove} onOpen={onOpen} />
+          ))}
+        </div>
+      )}
+
+      {status === 'ready' && rows.length > 0 && !mobile && (
         // ONE shared scroller for BOTH axes: header + rows live inside it, so
         // they x-scroll together (kills the header-bleed bug where the header
         // stayed in flow while rows scrolled). The header keeps its old

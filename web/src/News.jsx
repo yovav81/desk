@@ -15,7 +15,7 @@ const TABS = [
   { key: 'all', label: 'הכל' },
 ];
 
-export default function News({ watchSecIds = [], secLabels = {}, watchReady = true, refreshTick }) {
+export default function News({ watchSecIds = [], secLabels = {}, watchReady = true, refreshTick, mobile = false }) {
   const { items, status, error } = useNews(refreshTick);
   const [tab, setTab] = useState('all'); // default: הכל
 
@@ -74,7 +74,10 @@ export default function News({ watchSecIds = [], secLabels = {}, watchReady = tr
             <div style={{ fontSize: 12, color: t.mut }}>הפריט האחרון: {fmtRelative(lastUpdated)}</div>
           )}
         </div>
-        <div style={{ display: 'flex', gap: 6 }}>
+        {/* flexWrap: the three chips must never overflow — they wrap on a
+            narrow panel (mobile, or a desktop panel dragged narrow). On
+            mobile the padding grows toward a 40px+ tap target. */}
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {TABS.map((tb) => {
             const active = tab === tb.key;
             return (
@@ -82,7 +85,7 @@ export default function News({ watchSecIds = [], secLabels = {}, watchReady = tr
                 key={tb.key}
                 onClick={() => setTab(tb.key)}
                 style={{
-                  padding: '6px 13px',
+                  padding: mobile ? '10px 16px' : '6px 13px',
                   borderRadius: 999,
                   fontSize: 12.5,
                   fontWeight: 500,
