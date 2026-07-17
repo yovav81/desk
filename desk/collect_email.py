@@ -14,6 +14,7 @@ exits cleanly (no exception) with a log message — meant to be a safe no-op
 in local/dev environments without mail credentials configured.
 """
 import email
+import hashlib
 import imaplib
 import logging
 import os
@@ -96,6 +97,26 @@ def sanitize_filename(name: str) -> str:
     return name[:150] or "attachment"
 
 
+_EXT_RE = re.compile(r"\.([A-Za-z0-9]{1,5})$")
+
+
+def storage_key(email_id: int, filename: str) -> str:
+    """ASCII-only, collision-safe OBJECT KEY. Supabase Storage rejects
+    non-ASCII keys with HTTP 400 "The object name contains invalid characters"
+    (hit in production 2026-07-17 with a Hebrew PDF name; documented in
+    supabase/storage#133 — their own UI sanitizes to ASCII for this reason).
+    The key is DERIVED, not transliterated: {email_id}/{sha1(name)[:16]}{.ext}
+    with the extension whitelisted and lowercased. The HUMAN name — Hebrew
+    intact — lives in the metadata row's `filename` column; the UI displays
+    that and only ever uses the key to mint signed URLs. Deterministic:
+    same name -> same key (idempotent with x-upsert); different names ->
+    different hashes -> no collisions."""
+    m = _EXT_RE.search(filename or "")
+    ext = ("." + m.group(1).lower()) if m else ""
+    digest = hashlib.sha1((filename or "").encode("utf-8")).hexdigest()[:16]
+    return f"{email_id}/{digest}{ext}"
+
+
 def is_expired(fetched_at, now) -> bool:
     """Retention cutoff for one attachment (upload-time based)."""
     if fetched_at.tzinfo is None:
@@ -157,11 +178,11 @@ def save_attachments(engine, cfg, email_id: int, atts: list[dict]) -> tuple[int,
     """Upload + record metadata for one email. Returns (saved, oversize).
     Oversize files keep a metadata row with storage_path NULL (a permanent
     "exists but not stored" marker); failed uploads write NOTHING so they stay
-    retryable. Collision-safe path: {email_id}/{sanitized filename} — the DB id
-    avoids message_id's <>@ characters."""
+    retryable. The object key is ASCII-derived via storage_key() (Storage 400s
+    non-ASCII keys); `filename` keeps the original (Hebrew) name for display."""
     saved = oversize = 0
     for att in atts:
-        path = f"{email_id}/{att['filename']}"
+        path = storage_key(email_id, att["filename"])
         values = {
             "email_id": email_id,
             "filename": att["filename"],
