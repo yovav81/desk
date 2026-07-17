@@ -25,6 +25,7 @@ const mapWeb = (n) => ({
 });
 const mapEmail = (e) => ({
   key: `email-${e.id}`,
+  emailId: e.id, // for the expand-in-place lazy fetch (body + attachments)
   type: 'email',
   category: null,
   title: e.subject,

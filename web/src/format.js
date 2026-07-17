@@ -93,6 +93,13 @@ export function fmtRelative(ts) {
   return `${dd}.${mo}.${d.getFullYear()}`;
 }
 
+// Human file size for attachment chips. KB below 1 MB, MB above.
+export function fmtSize(bytes) {
+  if (bytes == null) return '';
+  if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  return Math.max(1, Math.round(bytes / 1024)) + ' KB';
+}
+
 export function tsValue(ts) {
   const v = ts ? Date.parse(ts) : NaN;
   return Number.isNaN(v) ? 0 : v; // nulls/invalid sort last
