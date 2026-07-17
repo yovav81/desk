@@ -18,11 +18,14 @@ import imaplib
 import logging
 import os
 import re
+from datetime import datetime, timedelta, timezone
 from email.header import decode_header
 from email.utils import parsedate_to_datetime
+from urllib.parse import quote
 
+import requests
 from bs4 import BeautifulSoup
-from sqlalchemy import select, update
+from sqlalchemy import bindparam, select, text, update
 
 from desk.db import emails, get_engine, init_db, insert_ignore, securities
 
@@ -30,6 +33,190 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("collect_email")
 
 IMAP_HOST = "imap.gmail.com"
+
+# --------------------------------------------------------------------------- #
+# Attachments (Phase 8 step 5). Files go to a PRIVATE Supabase Storage bucket  #
+# (signed-URL access only); this table row is just metadata. The bucket is     #
+# created by hand in the dashboard — see sql/004_email_attachments.sql.        #
+# --------------------------------------------------------------------------- #
+BUCKET = "email-attachments"
+# Locked cap: bigger files keep a metadata row (storage_path NULL) so the UI
+# can show "attachment exists, too big to store" — but the bytes are skipped.
+MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+# Retention: the free tier gives 1 GB of Storage and ~60 MB/day of analyst PDFs
+# fills that in ~17 days (research/EMAIL_BODY_FINDINGS.md). 14 days keeps
+# ~0.85 GB with headroom. The sweep deletes OBJECTS + METADATA ROWS only —
+# the emails row and body_text are NEVER touched.
+RETENTION_DAYS = 14
+# Attachment-worthy parts: anything explicitly marked attachment, plus
+# pdf/office MIME types some senders ship as inline.
+DOC_MIME_PREFIXES = (
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats",
+    "application/vnd.ms-",
+)
+
+# email_attachments is not yet declared in desk/db.py (created by sql/004 on
+# the live DB), so raw SQL until db.py catches up — the sec_ids precedent.
+# ON CONFLICT (email_id, filename) DO NOTHING = the idempotency key: a re-run
+# can never duplicate a metadata row, and uploads use x-upsert (same path
+# overwritten in place), so re-processing a message is always safe.
+_INSERT_ATTACHMENT = text(
+    "insert into email_attachments (email_id, filename, size_bytes, content_type, storage_path)"
+    " values (:email_id, :filename, :size_bytes, :content_type, :storage_path)"
+    " on conflict (email_id, filename) do nothing"
+)
+_EMAIL_ID_BY_MSGID = text("select id from emails where message_id = :message_id")
+
+
+def _storage_config() -> tuple[str, str]:
+    """Storage endpoint + service_role key, env-only. The key BYPASSES RLS —
+    it lives in GitHub Actions Secrets and nowhere else, and is never logged
+    or echoed (errors name the VARIABLE, never the value)."""
+    url = (os.environ.get("SUPABASE_URL") or "").strip().rstrip("/")
+    key = (os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or "").strip()
+    if not url or not key:
+        raise SystemExit(
+            "SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set — required to store "
+            "email attachments. Both are GitHub Actions Secrets (the key is the "
+            "service_role secret: backend-only, never in web/, never in logs)."
+        )
+    return url, key
+
+
+def sanitize_filename(name: str) -> str:
+    """Storage-safe filename: path components stripped (kills '../evil'),
+    quotes removed, anything outside letters/digits/Hebrew/space/._- becomes
+    '_', no '..' runs, capped length. Never returns empty."""
+    name = (name or "").replace("\\", "/").split("/")[-1]
+    name = _QUOTES_RE.sub("", name)
+    name = re.sub(r"[^0-9A-Za-z֐-׿ ._-]+", "_", name)
+    name = re.sub(r"\.{2,}", ".", name).strip(" .")
+    return name[:150] or "attachment"
+
+
+def is_expired(fetched_at, now) -> bool:
+    """Retention cutoff for one attachment (upload-time based)."""
+    if fetched_at.tzinfo is None:
+        fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+    return fetched_at < now - timedelta(days=RETENTION_DAYS)
+
+
+def extract_attachments(msg: email.message.Message) -> list[dict]:
+    """Attachment parts: disposition=='attachment' OR a pdf/office MIME type
+    with a filename. Returns [{filename, content_type, payload}]."""
+    out = []
+    if not msg.is_multipart():
+        return out
+    for part in msg.walk():
+        raw_name = part.get_filename()
+        ctype = part.get_content_type()
+        is_attach = part.get_content_disposition() == "attachment"
+        is_doc = any(ctype.startswith(p) for p in DOC_MIME_PREFIXES)
+        if not raw_name or not (is_attach or is_doc):
+            continue
+        payload = part.get_payload(decode=True)
+        if not payload:
+            continue
+        out.append({
+            "filename": sanitize_filename(decode_mime_header(raw_name)),
+            "content_type": ctype,
+            "payload": payload,
+        })
+    return out
+
+
+def _upload_to_storage(cfg: tuple[str, str], path: str, payload: bytes, content_type: str) -> bool:
+    """POST the bytes to the private bucket. x-upsert makes re-runs overwrite
+    in place instead of erroring. Fail-soft: False on any failure (logged
+    WITHOUT the key), the caller skips the metadata row so a later run/backfill
+    can retry."""
+    url = f"{cfg[0]}/storage/v1/object/{BUCKET}/{quote(path)}"
+    try:
+        r = requests.post(
+            url,
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {cfg[1]}",
+                "Content-Type": content_type or "application/octet-stream",
+                "x-upsert": "true",
+            },
+            timeout=60,
+        )
+    except Exception as e:
+        log.warning("storage upload failed for %s: %s", path, e)
+        return False
+    if r.status_code not in (200, 201):
+        log.warning("storage upload for %s -> HTTP %s", path, r.status_code)
+        return False
+    return True
+
+
+def save_attachments(engine, cfg, email_id: int, atts: list[dict]) -> tuple[int, int]:
+    """Upload + record metadata for one email. Returns (saved, oversize).
+    Oversize files keep a metadata row with storage_path NULL (a permanent
+    "exists but not stored" marker); failed uploads write NOTHING so they stay
+    retryable. Collision-safe path: {email_id}/{sanitized filename} — the DB id
+    avoids message_id's <>@ characters."""
+    saved = oversize = 0
+    for att in atts:
+        path = f"{email_id}/{att['filename']}"
+        values = {
+            "email_id": email_id,
+            "filename": att["filename"],
+            "size_bytes": len(att["payload"]),
+            "content_type": att["content_type"],
+            "storage_path": None,
+        }
+        if len(att["payload"]) > MAX_ATTACHMENT_BYTES:
+            oversize += 1
+            log.info("  attachment %s: %.1f MB > cap — metadata only, file skipped",
+                     path, len(att["payload"]) / 1e6)
+        else:
+            if not _upload_to_storage(cfg, path, att["payload"], att["content_type"]):
+                continue  # retryable — no row written
+            values["storage_path"] = path
+        with engine.begin() as conn:
+            if conn.execute(_INSERT_ATTACHMENT, values).rowcount and values["storage_path"]:
+                saved += 1
+    return saved, oversize
+
+
+def prune_attachments(engine, cfg) -> int:
+    """Retention sweep: delete Storage objects AND metadata rows older than
+    RETENTION_DAYS (bounded batch). If the Storage delete fails, rows are kept
+    so the next run retries — never orphan an object by dropping its row."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=RETENTION_DAYS)
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("select id, storage_path from email_attachments where fetched_at < :cutoff limit 500"),
+            {"cutoff": cutoff},
+        ).all()
+    if not rows:
+        return 0
+    paths = [p for _, p in rows if p]
+    if paths:
+        try:
+            r = requests.delete(
+                f"{cfg[0]}/storage/v1/object/{BUCKET}",
+                json={"prefixes": paths},
+                headers={"Authorization": f"Bearer {cfg[1]}"},
+                timeout=60,
+            )
+            if r.status_code != 200:
+                log.warning("retention: storage delete -> HTTP %s — keeping rows for retry", r.status_code)
+                return 0
+        except Exception as e:
+            log.warning("retention: storage delete failed: %s — keeping rows for retry", e)
+            return 0
+    ids = [i for i, _ in rows]
+    stmt = text("delete from email_attachments where id in :ids").bindparams(
+        bindparam("ids", expanding=True)
+    )
+    with engine.begin() as conn:
+        conn.execute(stmt, {"ids": ids})
+    return len(rows)
 
 
 def decode_mime_header(raw: str | None) -> str:
@@ -232,6 +419,11 @@ def collect() -> None:
         log.info("GMAIL_USER / GMAIL_APP_PASSWORD not set — skipping email collection (clean no-op).")
         return
 
+    # After the Gmail no-op check on purpose: local dev without mail creds
+    # never reaches this, so the collector stays a clean no-op there; in CI a
+    # forgotten secret fails loudly (the sec_ids pattern).
+    storage_cfg = _storage_config()
+
     engine = get_engine()
     init_db(engine)
     with engine.connect() as conn:
@@ -240,6 +432,7 @@ def collect() -> None:
     # Before touching the inbox: give previously-unattributed emails a chance
     # to match securities that were added after they arrived.
     reattribute_nulls(engine, secs)
+    retention_deleted = prune_attachments(engine, storage_cfg)
 
     imap = imaplib.IMAP4_SSL(IMAP_HOST)
     try:
@@ -253,6 +446,7 @@ def collect() -> None:
         log.info("unseen messages: %d", len(ids))
 
         fetched = new_count = dup_count = tagged = 0
+        attachments_saved = skipped_oversize = 0
         by_tier = {"secnum": 0, "symbol": 0, "name": 0}
         for msg_id in ids:
             try:
@@ -300,6 +494,18 @@ def collect() -> None:
                 else:
                     dup_count += 1
 
+                # Attachments: best-effort, fail-soft — a failed upload never
+                # blocks the mail pipeline (a metadata row is only written on
+                # success, so the email_backfill CLI can retry later).
+                atts = extract_attachments(msg)
+                if atts:
+                    with engine.connect() as conn:
+                        eid = conn.execute(_EMAIL_ID_BY_MSGID, {"message_id": message_id}).scalar()
+                    if eid is not None:
+                        s, o = save_attachments(engine, storage_cfg, eid, atts)
+                        attachments_saved += s
+                        skipped_oversize += o
+
                 imap.store(msg_id, "+FLAGS", "\\Seen")
             except Exception as e:
                 log.warning("failed processing message id %s: %s", msg_id, e)
@@ -308,9 +514,11 @@ def collect() -> None:
         # The summary that measures real-world attribution recall, per tier —
         # the collect_enrich pattern. Ambiguous cases appear as WARNINGs above.
         log.info(
-            "done: fetched=%d new=%d duplicate=%d attributed=%d (secnum=%d symbol=%d name=%d) none=%d",
+            "done: fetched=%d new=%d duplicate=%d attributed=%d (secnum=%d symbol=%d name=%d) none=%d "
+            "attachments_saved=%d skipped_oversize=%d retention_deleted=%d",
             fetched, new_count, dup_count, tagged,
             by_tier["secnum"], by_tier["symbol"], by_tier["name"], fetched - tagged,
+            attachments_saved, skipped_oversize, retention_deleted,
         )
     finally:
         try:
