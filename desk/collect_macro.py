@@ -14,10 +14,16 @@ Google News collector. Add more feeds by extending MACRO_FEEDS.
 import logging
 import urllib.request
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
 from sqlalchemy import select
 
+# ONE staleness definition for the whole news table — see the rationale at its
+# definition (Google News archive noise). Globes is a curated latest-N feed and
+# probably never trips it, but that is an assumption; the skipped_stale counter
+# measures it instead of trusting it.
+from desk.collect_news import is_stale
 from desk.db import get_engine, init_db, insert_ignore, news
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -59,7 +65,8 @@ def collect() -> None:
     engine = get_engine()
     init_db(engine)
 
-    total_fetched = total_new = total_skipped = 0
+    now = datetime.now(timezone.utc)
+    total_read = total_inserted = total_dup = total_stale = 0
     for source, url in MACRO_FEEDS:
         try:
             items = fetch_feed(url)
@@ -67,9 +74,12 @@ def collect() -> None:
             log.warning("macro feed failed for %s (%s): %s", source, url, e)
             continue
 
-        new_count = 0
+        inserted = stale = 0
         with engine.begin() as conn:
             for it in items:
+                if is_stale(it["published_at"], now):
+                    stale += 1
+                    continue
                 stmt = insert_ignore(engine, news, ["url"]).values(
                     sec_id=None,
                     source=source,
@@ -80,14 +90,22 @@ def collect() -> None:
                     category="macro",
                 )
                 if conn.execute(stmt).rowcount:
-                    new_count += 1
+                    inserted += 1
 
-        total_fetched += len(items)
-        total_new += new_count
-        total_skipped += len(items) - new_count
-        log.info("%s: fetched=%d new=%d skipped=%d", source, len(items), new_count, len(items) - new_count)
+        dup = len(items) - inserted - stale
+        total_read += len(items)
+        total_inserted += inserted
+        total_dup += dup
+        total_stale += stale
+        log.info(
+            "%s: read=%d inserted=%d duplicate=%d skipped_stale=%d",
+            source, len(items), inserted, dup, stale,
+        )
 
-    log.info("done: fetched=%d new=%d skipped=%d", total_fetched, total_new, total_skipped)
+    log.info(
+        "done: read=%d inserted=%d duplicate=%d skipped_stale=%d",
+        total_read, total_inserted, total_dup, total_stale,
+    )
 
 
 if __name__ == "__main__":

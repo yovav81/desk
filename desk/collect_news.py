@@ -9,7 +9,7 @@ column is in Hebrew (Google News hl/gl is set to he/IL for market=TASE).
 import logging
 import urllib.request
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from urllib.parse import quote
 
@@ -21,6 +21,27 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("collect_news")
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) DeskCollector/0.1"
+
+# Ingest staleness gate. Google News occasionally surfaces ARCHIVE items — a
+# SAP article dated 2026-01-05 arrived in the 2026-07-17 07:00 run and sank to
+# ~position 1400 of the published_at-sorted feed. That is archive noise, not
+# news: anything PROVABLY older than this many days at collection time is
+# skipped and counted, never inserted. Items with no parseable date are NOT
+# stale (we only act on proof) and keep the existing behaviour: stored with
+# published_at NULL. Ingest-time only — existing rows are never touched (the
+# one Jan-05 row already stored stays; one row isn't worth a migration).
+STALE_DAYS = 7
+
+
+def is_stale(published_at, now) -> bool:
+    """True only for a PROVABLY old article. None -> False (not provably old).
+    A naive timestamp (RFC 2822 '-0000') is compared as UTC — comparison only,
+    the stored value is whatever the feed said."""
+    if published_at is None:
+        return False
+    if published_at.tzinfo is None:
+        published_at = published_at.replace(tzinfo=timezone.utc)
+    return published_at < now - timedelta(days=STALE_DAYS)
 
 
 def watchlisted_securities(engine) -> list[dict]:
@@ -64,7 +85,8 @@ def collect() -> None:
     secs = watchlisted_securities(engine)
     log.info("securities on watchlists: %d", len(secs))
 
-    total_fetched = total_new = total_skipped = 0
+    now = datetime.now(timezone.utc)
+    total_read = total_inserted = total_dup = total_stale = 0
     for sec in secs:
         url = rss_url_for(sec)
         try:
@@ -73,9 +95,16 @@ def collect() -> None:
             log.warning("feed failed for %s (%s): %s", sec["sec_id"], sec["name"], e)
             continue
 
-        new_count = 0
+        # Truthful vocabulary (the maya-style "new=" ambiguity burned us twice):
+        # inserted= is the LITERAL insert count — ON CONFLICT DO NOTHING reports
+        # rowcount 0 on a duplicate — and duplicate=/skipped_stale= name the
+        # other two outcomes explicitly.
+        inserted = stale = 0
         with engine.begin() as conn:
             for it in items:
+                if is_stale(it["published_at"], now):
+                    stale += 1
+                    continue
                 stmt = insert_ignore(engine, news, ["url"]).values(
                     sec_id=sec["sec_id"],
                     source="google_news",
@@ -86,14 +115,22 @@ def collect() -> None:
                 )
                 result = conn.execute(stmt)
                 if result.rowcount:
-                    new_count += 1
+                    inserted += 1
 
-        total_fetched += len(items)
-        total_new += new_count
-        total_skipped += len(items) - new_count
-        log.info("%s (%s): fetched=%d new=%d skipped=%d", sec["sec_id"], sec["name"], len(items), new_count, len(items) - new_count)
+        dup = len(items) - inserted - stale
+        total_read += len(items)
+        total_inserted += inserted
+        total_dup += dup
+        total_stale += stale
+        log.info(
+            "%s (%s): read=%d inserted=%d duplicate=%d skipped_stale=%d",
+            sec["sec_id"], sec["name"], len(items), inserted, dup, stale,
+        )
 
-    log.info("done: fetched=%d new=%d skipped=%d", total_fetched, total_new, total_skipped)
+    log.info(
+        "done: read=%d inserted=%d duplicate=%d skipped_stale=%d",
+        total_read, total_inserted, total_dup, total_stale,
+    )
 
 
 if __name__ == "__main__":
