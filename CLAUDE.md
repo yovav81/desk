@@ -5,11 +5,11 @@ current/MTD/YTD performance + aggregated news (web + forwarded emails).
 Filings (SEC/MAYA/MAGNA) arrive later via a read-only link to an existing
 system — always out of scope for this project.
 
-Will eventually be a hosted, multi-user service (employees, mobile-friendly).
-Phase 0 = data source investigation (`research/FINDINGS.md`). Phase 1 =
-data foundation: DB schema, securities mapping, news/email collectors.
-Phase 2a = two-tier price collector (done). Next: 2b MAYA filings collector,
-2c React UI. See `TODO.md`.
+**LIVE, multi-user, at desk-henna.vercel.app** (Vercel auto-deploys `web/` on
+push; Supabase = auth + Postgres + Edge Function). All collectors run in the
+cloud: news/macro/email/enrich/prices + MAYA & SEC filings, dispatched by
+**Supabase pg_cron** (the primary clock — GitHub `schedule:` is best-effort
+fallback only). Phases 0–6 done; history and open items in `TODO.md`.
 
 ## Folder isolation
 
@@ -77,8 +77,10 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   and no policy, reads return an **empty array with no error** (looks like "no
   data" but is a permission block). Each UI-read table needs a read policy:
   `create policy "anon read" on public.<table> for select to anon, authenticated using (true);`
-  Applied so far: `users`, `securities`, `quotes`, `watchlist`. **Still needed:
-  `news`, `emails`, `filings`** (verified they return 0 rows / no error).
+  **Applied to every UI-read table** (users/securities/quotes/watchlist/news/
+  emails/filings/price_history/tase_securities); `users`+`watchlist` are
+  per-user via auth.uid() (sql/6b-1). Any NEW UI-read table needs its policy
+  or it will silently show empty.
 - **News feed = 4 source types, 3 filters** (`web/src/useNews.js`,
   `web/src/News.jsx`): one time-sorted feed merging **web news** (`news`
   category `stock`/`macro`), **email** (`emails`), **MAYA filing** (`filings`
@@ -103,22 +105,20 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   MAYA to resolve prices/companyIds. `securities` is inserted **ON CONFLICT DO
   NOTHING** (`ignoreDuplicates`) so an already-enriched row is never downgraded;
   then a `watchlist` row for the current user. A security with no `quotes` row
-  renders as **"ממתין לנתונים"** (not a blank). **Caveat:** only US/GLOBAL adds
-  self-enrich (collect_prices, ~15 min). A **TASE** add has no letter ticker
-  (`tase_securities.symbol` is always NULL — no free number→ticker source, and
-  `<number>.TA` 404s), so it is inserted `price_source='manual'` and stays
-  pending until `python -m desk.onboard_cli resolve TASE <number> --add` runs —
-  the cron does **not** run `maya_ids`/onboarding. See TODO 4b-3.
+  renders as **"ממתין לנתונים"** (not a blank). **All markets self-enrich:**
+  US/GLOBAL via collect_prices directly; a **TASE** add lands
+  `price_source='manual'` with `yahoo_symbol` NULL and is resolved by
+  `desk/collect_enrich.py` (ISIN→Yahoo, runs in collect.yml before prices), so
+  it gets its ticker + first quote in the same collector run.
 - **Remove = watchlist row ONLY.** Never delete the security or its
   news/emails/filings/quotes — those are **shared across users**, so deleting
   them would destroy another user's data.
 - **Writes need RLS policies too** (same trap as reads): the UI's add/remove
   needs INSERT on `securities`, INSERT/DELETE on `watchlist`, **USAGE on
-  `watchlist_id_seq`** (SERIAL pk — inserts fail without it), and a **read
-  policy on `tase_securities`**. Scoped `to authenticated` (login required), not
-  `anon`. They can't yet be scoped per-user — `watchlist.user_id` still points at
-  our `users` table, not the Auth uid, so **any logged-in user can modify any
-  watchlist row**; tighten when the auth-uid mapping lands.
+  `watchlist_id_seq`** (SERIAL pk — inserts fail without it). `watchlist`
+  policies are **per-user** via auth.uid()→users.id (sql/6b-1, verified live:
+  a second user sees an empty watchlist); `securities` INSERT stays open to
+  authenticated by design (shared pool).
 - **Security detail page** (`web/src/Detail.jsx`, `Chart.jsx`,
   `usePriceHistory.js`) — full-screen, reached by clicking a watchlist row
   (`openSecId` state in App; one page, **no router**). The × calls
@@ -138,9 +138,15 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   News.jsx and Detail.jsx so the four source types can't drift apart. The detail
   feed (`useSecurityFeed(secId)` in useNews.js) filters **server-side** by
   sec_id and omits the security tag (redundant inside one security).
-- Current state: **step 5b** — login, two-panel dashboard (watchlist right with
-  search/add/remove, news feed left) and the full-screen security detail page.
-  Next is polish + deploy.
+- **Freshness (Phase 5):** feed tags show `securities.name` (fallback
+  `symbol || sec_id`); auto-refresh = refetch on `visibilitychange` + a 3-min
+  interval, **paused while the tab is hidden** (one timer in App drives both
+  data hooks via `refreshTick` — never add a second timer). The news header
+  shows **"הפריט האחרון"** from `max(published_at)` — deliberately NOT "when
+  the browser fetched" (that would read "עכשיו" forever and lie).
+- Current state: **deployed and live** — login, two-panel dashboard with
+  search/add/remove, detail page + chart, auto-refresh. Remaining UI work is
+  polish (6c: draggable divider, sticky column, mobile).
 
 ## Architecture
 
@@ -154,11 +160,34 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
 - `desk/securities.py` — loads `data/securities.csv`, lookup only. Does not
   touch prices.
 - `desk/collect_news.py`, `desk/collect_macro.py`, `desk/collect_email.py`,
-  `desk/collect_prices.py`, `desk/collect_maya.py` — **cloud collectors,
-  WRITE-only** against `DESK_DB_URL`. Meant to run unattended on a schedule
-  (`.github/workflows/collect.yml`, every 15 min). The eventual dashboard is
-  **READ-only** against the same DB — never merge write/collection logic
-  into dashboard code.
+  `desk/collect_enrich.py`, `desk/collect_prices.py`, `desk/collect_maya.py`,
+  `desk/collect_sec.py` — **cloud collectors, WRITE-only** against
+  `DESK_DB_URL`. The dashboard is **READ-only** against the same DB — never
+  merge write/collection logic into dashboard code.
+- **Workflows layout:** `.github/workflows/collect.yml` = news → macro →
+  email → **enrich** → prices (enrich runs BEFORE prices so a just-added TASE
+  security gets ticker + first quote in the same run);
+  `filings.yml` = MAYA + SEC (the time-sensitive lane; SEC last because it's
+  the only step with a hard-fail config mode); `tase_list.yml` = daily TASE
+  registry sweep. House pattern: secrets at job level, no `continue-on-error`
+  (a failing step skips the rest), every collector internally fail-soft.
+- **Scheduling — pg_cron is the clock, GitHub `schedule:` is fallback.**
+  GitHub schedule events were MEASURED arriving 74–180 min apart despite */15
+  and */5 crons (documented best-effort/droppable; paying doesn't help; a
+  lightweight dedicated workflow didn't help either). The fix: **Supabase
+  pg_cron + pg_net** POST `workflow_dispatch` to GitHub — jobs
+  `desk-dispatch-filings` ('*/5 * * * *') and `desk-dispatch-collect`
+  ('2,17,32,47 * * * *') — with a fine-grained PAT (Actions:write, this repo
+  only, expires ~2026-10-14) stored in **Supabase Vault** as
+  `gh_dispatch_token`. Measured: dispatch→run-start <1 min; end-to-end
+  filing→dashboard ~7 min. The yml `schedule:` blocks stay as a free lazy
+  fallback — dedup absorbs overlaps. **Ops gotchas:** pg_net is async —
+  `cron.job_run_details` 'succeeded' only means the POST was queued; the real
+  GitHub status code is in `net._http_response` (that's how a placeholder-token
+  401 was caught). Vault `create_secret` stores whatever string it's given —
+  verify by length/prefix after storing, never assume. The repo is **PUBLIC**
+  (full-history secret scan first: research/PUBLIC_REPO_SECRET_SCAN.md — zero
+  credentials ever committed), so Actions minutes are free.
 - **News categories & macro** (`news.category` = `'stock'` | `'macro'`):
   `collect_news.py` writes per-security `'stock'` rows; `collect_macro.py`
   writes general-economy `'macro'` rows (`sec_id=NULL`) from Globes RSS
@@ -209,15 +238,53 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   `collect_maya.py` skips (never crashes on) securities with a NULL
   `maya_company_id` and logs a hint to run `maya_ids`. Dedup guard:
   `filings` UNIQUE(`source`, `maya_id`) — sacred, like `news.url`.
+- **SEC filings** (`desk/collect_sec.py`, `desk/sec_ids.py`) — per-company
+  `data.sec.gov/submissions/CIK##########.json` for watchlisted `market='US'`
+  securities with a cached `securities.cik` (backfilled by
+  `python -m desk.sec_ids --commit`; `cik_to_path()` is THE one zero-padding
+  site — never re-pad). Requires a **descriptive User-Agent** (`SEC_USER_AGENT`
+  env — generic/absent UA → 403). **Form allowlist** (10-K/10-Q/8-K/DEF 14A/
+  20-F/6-K + their /A amendments — unfiltered, the feed is ~59% Form 4 noise;
+  foreign issuers like SAP file 20-F/6-K, never 10-K), Hebrew titles composed
+  from a static map ("דוח שנתי (10-K)"), 90-day window. Dedup:
+  `filings` UNIQUE(`source`, `accession_no`) (sql/002; `maya_id` is NULL on sec
+  rows, `accession_no` NULL on maya rows — NULLs are distinct, the guards never
+  interfere). CLI defaults to **dry-run**; CI passes `--commit`.
+- **TASE ticker enrichment** (`desk/collect_enrich.py`) — resolves the letter
+  ticker for UI-added TASE securities (`yahoo_symbol IS NULL`), the one datum
+  no other source provides. Method (validated n=50, 92% match, **zero
+  wrong-company** — research/TASE_ENRICHMENT_FINDINGS.md): **constructed ISIN**
+  (`"IL" + zfill(9)(number) + Luhn`) → Yahoo search → **mandatory TLV gate**
+  (`is_tlv_listing()`: Tel Aviv exchange AND `.TA` suffix — Camtek's ISIN
+  returns only its NASDAQ line, which would store USD prices on an ILS row).
+  Identity is structural (the ISIN *contains* the security number — no name
+  collisions); Yahoo's name is logged for eyeballing. `price_source` flips to
+  `yfinance` only after the NaN guard confirms real closes; rows with
+  hand-entered `manual_prices` are NEVER flipped (deliberate migration only).
+  NO-HIT/non-TLV/no-prices → stays as-is, logged — **never guess**.
+  `MAX_PER_RUN=25` caps Yahoo load; dry-run default, `--commit` in CI.
+- **Timestamps: sources lie about timezones — convert in ONE place per
+  collector.** SEC `acceptanceDateTime` says `Z` but is **US Eastern wall
+  clock** (measured against the ATOM feed); `collect_sec._parse_published`
+  strips the false label and converts via `zoneinfo America/New_York`. MAYA
+  `publishDate` is **naive Israel local**; `collect_maya._parse_published`
+  attaches `Asia/Jerusalem` and converts. Always zoneinfo, **never a fixed
+  offset** (DST flips both twice a year). `published_at` in the DB is genuine
+  UTC. Historical rows: SEC backfilled via sql/003 (guarded by
+  `applied_migrations`); MAYA rows were deleted + re-collected after the
+  sql/003 MAYA backfill went wrong — see Lessons.
 - **Two-tier pricing** (`securities.price_source`): `yfinance` securities
   are batch-fetched by `collect_prices.py` (last price, day change,
   MTD/QTD/YTD/12M; period anchors recomputed once per calendar day via
-  `quotes.anchors_date`); `manual` securities (no free source, e.g. Sano
-  813014, Bio-Dvash 1082346) get prices entered by hand:
+  `quotes.anchors_date`); `manual` securities get prices entered by hand:
   `python -m desk.manual_price <sec_id> <YYYY-MM-DD> <close>` (ILS, not
   agorot; same-date re-entry updates the close). Both tiers upsert one
   `quotes` row per security via `db.upsert()`. Empty/all-NaN yfinance
   history never overwrites good data (`status` = `no_data`/`stale`).
+  **Note:** Sano 813014 (`SANO1.TA`) and Bio-Dvash 1082346 (`BHNY.TA`) DO have
+  Yahoo listings — the Phase 0 "no free source" conclusion was built on
+  guessed tickers and is overturned. They stay on the manual tier with their
+  hand-entered prices until a **deliberate** migration (open item).
 - **`price_history`** (daily closes behind the detail-page chart) — written by
   `collect_prices` from the **SAME ~400d frame it already pulls** for the period
   anchors: **no extra yfinance calls, ever**. Persisted only on the daily anchor
@@ -249,9 +316,10 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   `price_source='manual'` — never a guessed price. **No-guess policy:** every
   network path is fail-soft; unresolvable input returns `NotFound` with a
   reason, never a fabricated symbol. yfinance rejects numeric `.TA`
-  (`629014.TA` 404s), and there's no free number→ticker source, so TASE letter
-  tickers come from the known mapping; unknown TASE securities fall back to
-  manual. **Name → primary stock:** a company-name search resolves to the
+  (`629014.TA` 404s); TASE letter tickers come from the DB row or, for unknown
+  securities, from the **ISIN enrichment collector** (`collect_enrich`, above) —
+  onboarding itself still never derives one, and unresolved TASE securities
+  fall back to manual. **Name → primary stock:** a company-name search resolves to the
   company's PRIMARY STOCK only, via MAYA's authoritative `mainSecurityId`
   (`api/v1/companies/<id>/details`) — `resolve_company_to_primary_stock()`.
   Bonds/other series are added by their exact security number; a company with
@@ -328,11 +396,48 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
 - TASE bonds have no free API source (Yahoo doesn't carry them; TASE's own
   endpoints are WAF-blocked; DataHub's EOD bond product is paid, ~$100/mo).
   Still an open decision — see `TODO.md`.
-- `gh` CLI is not installed on this machine; GitHub repo/secrets setup for
-  this project has been manual/undone so far — don't assume a remote exists.
+- `gh` CLI is not installed on this machine. The repo is
+  github.com/yovav81/desk — **PUBLIC** (secret-scanned first); GitHub setup is
+  done in the browser, not via `gh`.
+- **pg_net is async:** `cron.job_run_details` saying 'succeeded' only means
+  the HTTP call was queued — the real GitHub status lives in
+  `net._http_response.status_code`. Check it; a 401 hides behind 'succeeded'.
+- **Vault stores whatever string you give it** — after `create_secret`/
+  `update_secret`, verify by length/prefix; a placeholder saved by mistake
+  looks identical to a real token until GitHub says 401.
+
+## Lessons (paid for in production — keep them)
+
+- **An implausible number can be real.** "MAYA doesn't publish at 2am" felt
+  like proof of a timezone bug — but MAYA publishes Form 4s at 23:00+. The
+  implausibility argument was the wrong lens; only comparing against ground
+  truth (the website) settles a timestamp.
+- **A code fix and a data backfill are separate decisions.** The MAYA code fix
+  was correct AND the backfill corrupted the data. Approve them separately;
+  verify the rows' actual state before shifting anything.
+- **When the corruption mechanism isn't understood, re-collect from source** —
+  don't compute a repair on top of a model you can't confirm. Deleting and
+  re-collecting the maya rows fixed in minutes what two computed repairs
+  argued about for a day.
+- **`fetched_at` semantics are UNKNOWN** (overwritten-per-run vs
+  ON-CONFLICT-preserved — the evidence was destroyed by the re-collect).
+  Build **nothing** on it until it's resolved (open item).
+- **A documented conclusion built on a guess is still a guess.** Phase 0
+  recorded "Sano/Bio-Dvash have no free source" after probing *guessed*
+  tickers; the real listings (SANO1.TA/BHNY.TA) existed all along. Mark
+  MEASURED vs INFERRED honestly — an INFERRED claim marked MEASURED cost us
+  160 corrupted rows once already.
+- **GitHub `schedule:` is best-effort and can be hours late** — measured
+  74–180 min gaps on a correct cron. If timing matters, dispatch externally
+  (pg_cron → workflow_dispatch) and keep the cron only as fallback.
 
 ## Secrets
 
 Read from environment only, never hardcoded: `DESK_DB_URL`,
-`DESK_DEFAULT_USER`, `GMAIL_USER`, `GMAIL_APP_PASSWORD`. Documented in
-`.env.example` / `README.md`. In CI these are GitHub Actions secrets.
+`DESK_DEFAULT_USER`, `GMAIL_USER`, `GMAIL_APP_PASSWORD`, `SEC_USER_AGENT`
+(descriptive UA with a contact — SEC 403s without it). Documented in
+`.env.example` / `README.md`. In CI these are GitHub Actions secrets — still
+private on the public repo. The **GitHub dispatch PAT** (fine-grained,
+Actions:write, this repo only, expires ~2026-10-14) lives ONLY in **Supabase
+Vault** as `gh_dispatch_token` — never in the repo, never in Actions secrets;
+rotate via Vault `update_secret` (open item).

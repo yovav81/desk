@@ -111,13 +111,9 @@
       מחיר / יומי / חודש / רבעון / שנה / 12ח׳), green/red returns, ידני tag +
       "—" daily for manual rows, ₪/$ currency, count + loading/empty/error
       states. Verified visually against representative data.
-- [ ] **TODO(auth-mapping):** `watchlist.user_id` references our own `users`
-      table, not the Supabase Auth uid. Step 2 reads the seeded "owner"
-      user's watchlist as a stand-in. Wire auth-uid ↔ users.id in a later
-      step so each user sees their own watchlist.
-- [ ] **RLS note:** tables were created by the Python collectors (raw SQL), so
-      the anon role may lack SELECT. If the table shows a permission/RLS
-      error, grant read access (see CLAUDE.md / the error message).
+- [x] **TODO(auth-mapping)** — closed by 6b-1 (2026-07-15): users.auth_uid
+      bridges auth.uid() ↔ users.id; per-user RLS live and verified.
+- [x] **RLS note** — read policies applied to every UI-read table (2026-07-16).
 - [x] Step 3 — unified news/email/filings panel — DONE (2026-07-14).
       Left panel: web/src/useNews.js fetches news+emails+filings once;
       web/src/News.jsx merges FOUR source types (web news, email, MAYA, SEC)
@@ -125,9 +121,8 @@
       and three tabs — המניות שלי / מאקרו וסקירות / הכל (default הכל). Two-panel
       layout (watchlist right, news left). Verified rendering + filtering +
       tab switching against representative data.
-- [ ] **RLS for news/emails/filings:** verified these 3 tables return 0 rows
-      with no error via the anon key (RLS-without-policy). Add read policies
-      (see CLAUDE.md) so the feed populates; the fetch code is already correct.
+- [x] **RLS for news/emails/filings** — read policies applied; feed populates
+      live (2026-07-16).
 - [x] Step 4a — GLOBAL onboarding resolver — DONE (2026-07-14). Yahoo-search
       resolve-assisted global equities (EQUITY-filtered, never auto-pick,
       collision-safe); Hebrew/number → MAYA, Latin → SEC+Yahoo merged. GBp
@@ -173,11 +168,11 @@
       substring) and the merge INTERLEAVES US/GLOBAL. Straight concatenation +
       substring matching let junk (CHESAPEAKE contains "sap") fill all 8 slots
       and drop SAP.DE entirely.
-      - [ ] **Not yet deployed/verified from the cloud** — needs `supabase login`
-            + `link` (browser step). The deploy also answers the open
-            datacenter-IP question from EDGE_SEARCH_FINDINGS.md for Yahoo/SEC.
-      - [ ] Add the real app origin to ALLOWED_ORIGIN_RE when the UI is
-            deployed (Vercel step).
+      - [x] Deployed + verified from the cloud (2026-07-15): q=SAP/AAPL return
+            candidates, notes[] empty — the datacenter-IP question for
+            Yahoo/SEC is answered (works).
+      - [x] `*.vercel.app` covers the deployed app; narrowing to the exact URL
+            is an open item (low).
 - [x] Step 4b-3 — search + picker + add/remove in the UI — DONE (2026-07-15).
       web/src/useSearch.js routes by query: Hebrew or bare digits →
       `tase_securities` directly (ilike name / prefix-match security_number);
@@ -191,25 +186,13 @@
       (security/news/filings are shared and survive). No quotes row renders as
       a gold "ממתין לנתונים" badge. Verified: build + oxlint clean, routeQuery
       unit-tested against the real module (13 cases).
-      - [ ] **BLOCKED until the RLS SQL is run** (given to the user, not run by
-            us): read policy for `tase_securities` (it never had one — RLS
-            without a policy returns 0 rows and NO error, so search looks empty
-            but is a permission block), plus INSERT on `securities`,
-            INSERT/DELETE on `watchlist`, and USAGE on `watchlist_id_seq`
-            (SERIAL pk — insert fails without it). Live search/add/remove is
-            unverified until then.
-      - [ ] **TASE adds do NOT get prices automatically** — the cron
-            (collect.yml) runs news/macro/email/prices/maya but NOT
-            `desk.maya_ids` or the onboarding resolver. `tase_securities.symbol`
-            is always NULL (no free number→ticker source), so a TASE pick is
-            inserted price_source='manual' with yahoo_symbol NULL and stays at
-            "ממתין לנתונים" until someone runs
-            `python -m desk.onboard_cli resolve TASE <number> --add` (which
-            resolves the ticker + maya_company_id and can upgrade
-            manual→yfinance). US/GLOBAL adds DO fill in within ~15 min.
-            **Fix properly by adding an enrichment step to collect.yml**
-            (maya_ids + an onboarding pass over unenriched securities) — the
-            collectors were out of scope for this step.
+      - [x] RLS SQL run; live search/add/remove verified in production
+            (2026-07-16, bilingual search verified on the deployed site).
+      - [x] **TASE adds now self-enrich** — closed by Phase 6 (2026-07-17):
+            desk/collect_enrich.py resolves number→ticker via constructed ISIN
+            in collect.yml before prices. (The old note's "run maya_ids +
+            onboarding in cron" framing was stale — neither resolves a ticker;
+            see research/TASE_ENRICHMENT_FINDINGS.md.)
 - [x] Step 5a — persist daily price history (backend) — DONE (2026-07-15).
       Schema: `price_history` (sec_id FK + price_date composite PK, close;
       ix_price_history_sec_date on (sec_id, price_date desc)) — new table, so
@@ -230,12 +213,8 @@
       for all three; prune removed a seeded 500-day-old row; re-run with anchors
       forced stale re-wrote 728 rows with **0 duplicates** and corrected TEVA
       95.15→95.03 (upsert, not insert).
-      - [ ] **Not yet run against the live DB** — needs `python -m desk.collect_prices`
-            with $env:DESK_DB_URL set (user).
-      - [ ] **RLS:** `price_history` will need a read policy before 5b can chart
-            it (`create policy "anon read" on public.price_history for select to
-            anon, authenticated using (true);`) — same silent-empty trap as the
-            other UI-read tables.
+      - [x] Run against the live DB; history populated (2026-07-15/16).
+      - [x] `price_history` read policy applied (2026-07-16).
 - [x] Step 5b — security detail page + chart — DONE (2026-07-15).
       Full-screen page (not a drawer) replacing the dashboard via plain state in
       App (`openSecId`; one page — no router). Clicking a watchlist row opens
@@ -260,11 +239,9 @@
       doesn't divide by zero, TEVA's real ILS range fits the viewBox), the
       point-count thresholds against 5a's real counts (AAPL 252 / TEVA 223 /
       Bagira 23 chart; 1-point and manual don't), and feed scoping.
-      - [ ] **Needs the price_history read policy** or the chart shows "אין
-            מספיק היסטוריה" for everything (RLS returns an empty array with no
-            error). Same trap still open on `news`/`emails`/`filings` — until
-            those have policies the detail feed will look empty too.
-      - [ ] Not visually verified in a browser (no browser here) — worth a look.
+      - [x] price_history + news/emails/filings read policies applied; chart
+            and detail feed populate live (2026-07-16).
+      - [x] Visually verified on the deployed site (2026-07-16).
 - [x] Step 6b-1 — per-user auth + tight watchlist RLS — DONE (2026-07-15).
       Closes the TODO(auth-mapping) open since step 2 **and** the hole where any
       logged-in user could read/modify any watchlist.
@@ -291,47 +268,120 @@
       idempotent (3x, no loss), multiple unlinked users allowed, duplicate
       auth_uid rejected, collector union spans all users and de-dupes overlaps,
       fresh create_all includes the column. Frontend build + oxlint clean.
-      - [ ] **RUN `sql/6b-1_per_user_auth_rls.sql`** — section 1 (link 'owner'
-            to the auth account) must run BEFORE the next UI login, or first
-            login provisions a new empty user and the watchlist looks empty
-            (section 6 recovers). Sections 2-3 replace the using(true) policies.
-      - [ ] `securities` INSERT stays open to authenticated **by design** —
-            adding a security is a shared/global act; what's personal is the
-            watchlist row, now locked.
-      - [ ] Browser test after the SQL: my rows still there; a 2nd test user
-            sees an EMPTY watchlist and none of mine.
-- [ ] Step 6b-2 — Vercel deploy. Prep DONE (2026-07-15): web/DEPLOY.md is the
-      ordered checklist. **No code/config change was needed** — no vercel.json
-      (Root Directory is a project setting a config file can't set, and the Vite
-      preset already yields `npm run build` → `dist`; a file would only restate
-      defaults and drift). Grepped web/src: nothing hardcodes localhost, and
-      `functions.invoke('search')` resolves against VITE_SUPABASE_URL.
-      Settings: Root Directory `web` (the only non-default), preset Vite,
-      everything else default. `.env`/`dist` are gitignored; only `.env.example`
-      is tracked.
-      - [ ] **RUN sql/6b-1_per_user_auth_rls.sql FIRST.** The anon key is public
-            in the bundle by design; until 6b-1 lands `watchlist` still has
-            `anon read using(true)`, so a public URL would expose every
-            watchlist to anyone who loads the page, logged in or not.
-      - [ ] Push BEFORE connecting Vercel (it builds from GitHub, not the laptop).
-      - [ ] Add VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY (Production+Preview)
-            **before the first build** — Vite inlines them at BUILD time; adding
-            them later needs a Redeploy.
-      - [ ] Supabase Site URL / Redirect URLs: **not required for login** (we
-            only use signInWithPassword — no magic link/OAuth/confirmation
-            redirect), but set them anyway or future password-reset emails will
-            point at the localhost:3000 default.
-      - [ ] Edge CORS: `*.vercel.app` already covers production AND preview
-            (verified against real URL shapes) — **no function redeploy needed**.
-            A custom domain would need adding to ALLOWED_ORIGIN_RE + redeploy.
-      - [ ] **Tighten ALLOWED_ORIGIN_RE once the URL is known** — `*.vercel.app`
-            currently lets ANY vercel.app-hosted site call our function. Low
-            impact (public-data search proxy, JWT on) but the bound is weak
-            since the anon key is public.
+      - [x] `sql/6b-1_per_user_auth_rls.sql` run; 'owner' linked (2026-07-15).
+      - [x] `securities` INSERT stays open to authenticated **by design** —
+            adding a security is a shared/global act; the watchlist row is the
+            personal part, now locked.
+      - [x] Browser-tested in production: owner's rows intact; **test2 sees an
+            EMPTY watchlist** — per-user RLS verified (2026-07-16).
+- [x] Step 6b-2 — Vercel deploy — DONE (2026-07-16). **LIVE at
+      desk-henna.vercel.app.** No vercel.json (Root Directory `web` in the
+      dashboard, Vite preset defaults); checklist web/DEPLOY.md. 6b-1 RLS ran
+      first, env vars set before first build, Supabase Auth URLs configured,
+      Vercel auto-deploys on push. Verified live: per-user RLS (test2 empty),
+      bilingual search, add/remove, detail page.
+      - [ ] Tighten ALLOWED_ORIGIN_RE from `*.vercel.app` to the exact app URL
+            (low; see Open items).
 - [ ] Step 6c — UI polish: draggable panel divider, sticky name column, mobile
       layout.
 
-## Open items (carried over)
-- [ ] Decide bond price source (DataHub paid EOD vs manual tier) — manual
-      tier now exists as a stopgap for unpriced securities
-- [ ] Sign up to TASE DataHub, verify free "Securities (Basic)" fields
+## Phase 3: SEC filings collector — DONE (2026-07-15)
+- [x] Investigation (research/SEC_COLLECTOR_FINDINGS.md): submissions endpoint,
+      1000-filing recent block, UA rule measured (no descriptive UA → 403),
+      accession number overflows INTEGER → own dedup column.
+- [x] Schema sql/002: filings.accession_no VARCHAR(32) + UNIQUE(source,
+      accession_no) (unique INDEX for idempotency), maya_id now nullable,
+      securities.cik INTEGER. Rollback script included. db.py caught up.
+- [x] desk/sec_ids.py — ticker→CIK backfill CLI (dry-run default, --commit;
+      `cik_to_path()` = THE one zero-padding site). All 5 US securities have
+      CIKs (AAPL/BAC/C/MSFT/SAP).
+- [x] desk/collect_sec.py — submissions JSON per CIK, form allowlist
+      (10-K/10-Q/8-K/DEF 14A/20-F/6-K + /A; unfiltered feed is ~59% Form 4
+      noise; SAP is a foreign issuer → files 20-F/6-K), Hebrew titles
+      ("דוח שנתי (10-K)" etc.), 90-day window, doc URLs to sec.gov Archives.
+      Verified in production: 16 filings inserted, re-run 0 (dedup), Hebrew
+      titles render in the live UI.
+- [x] Wired into CI with SEC_USER_AGENT secret (now in filings.yml).
+
+## Phase 4: timestamps + scheduling — DONE (2026-07-17)
+- [x] **SEC timezone bug** — acceptanceDateTime is US Eastern mislabelled 'Z'
+      (measured: same instant as the ATOM feed's -04:00). Fixed in code
+      (zoneinfo America/New_York), backfilled via sql/003. VERIFIED: BAC 8-K =
+      14:45Z = 10:45 NY market open. SEC half of sql/003 is CORRECT and stays.
+- [x] **MAYA timezone saga — documented honestly:** publishDate is naive Israel
+      local; the old code stored it 3h late. The CODE fix (Asia/Jerusalem) was
+      correct, but the sql/003 MAYA backfill was WRONG (double-shifted / hit
+      rows it shouldn't). RESOLUTION: deleted all maya rows and re-collected
+      from source; now verified correct against the MAYA website. The
+      applied_migrations guard remains for the SEC half. Full post-mortem:
+      research/FRESHNESS_FINDINGS.md (three models of one field, kept on
+      purpose).
+- [x] **Scheduling saga:** GitHub `schedule` measured 74–180 min apart despite
+      */15 and */5 crons; phase-shifted crons + a dedicated lightweight
+      filings.yml (D2) did NOT fix it (documented best-effort/droppable; paying
+      doesn't help). Repo made PUBLIC (full-history secret scan:
+      research/PUBLIC_REPO_SECRET_SCAN.md, GO, zero credentials ever committed)
+      → Actions minutes free.
+- [x] **SOLUTION (Path A): Supabase pg_cron + pg_net + Vault** POST
+      workflow_dispatch to GitHub. Jobs: desk-dispatch-filings ('*/5') and
+      desk-dispatch-collect ('2,17,32,47'). Fine-grained PAT (Actions:write,
+      desk repo only, 90-day expiry ~2026-10-14) in Vault as
+      'gh_dispatch_token'. MEASURED: dispatch→run-start <1 min (3/3 incl.
+      off-hours); end-to-end filing→dashboard ~7 min. The yml `schedule:`
+      blocks remain as free lazy fallback (dedup absorbs overlaps).
+
+## Phase 5: frontend freshness + labels — DONE (2026-07-16)
+- [x] Feed tags show securities.name (fallback symbol||sec_id) — was the bare
+      security number (App.jsx secLabels).
+- [x] Auto-refresh: refetch on visibilitychange + 3-min interval, paused while
+      the tab is hidden; one timer drives useWatchlist + useNews via
+      refreshTick. No more manual F5.
+- [x] "הפריט האחרון" header from max(published_at) across the feed — honest
+      content freshness ("when the browser fetched" rejected as misleading).
+      Deployed via Vercel auto-deploy. Findings:
+      research/FRONTEND_FRESHNESS_FINDINGS.md.
+
+## Phase 6: TASE ticker enrichment — DONE (2026-07-17)
+- [x] Investigation (research/TASE_ENRICHMENT_FINDINGS.md): the blocker for
+      UI-added TASE securities is yahoo_symbol; NO automated number→ticker
+      path existed (seeded rows worked only because a human typed tickers into
+      data/securities.csv; the old "maya_ids+onboarding in cron" TODO was stale).
+- [x] Method discovered + validated: constructed ISIN ("IL"+zfill(9)+Luhn) →
+      Yahoo search → **TLV exchange gate** → name logged. Bare number and
+      <number>.TA fail 0/6; ISIN 6/6. Scale test n=50 random (seed 20260716):
+      **92% match, ZERO wrong-company**; failures structural (foreign
+      incorporation — Kenon; Yahoo gaps) and fail SAFE. Camtek proved the TLV
+      gate (ISIN returned only its NASDAQ line).
+- [x] **Overturned a Phase 0 "fact":** Sano = SANO1.TA and Bio Dvash = BHNY.TA
+      exist on Yahoo with real prices — Phase 0 had probed GUESSED tickers
+      (SANO.TA/BDVSH.TA). They keep manual prices until a deliberate migration
+      (has_manual_prices() blocks the tier flip, loudly).
+- [x] desk/collect_enrich.py (dry-run default, --commit in CI; MAX_PER_RUN=25;
+      NaN guard before any manual→yfinance flip) wired into collect.yml BEFORE
+      prices. Verified live: 8/8 resolved, 6 upgraded, 2 held manual;
+      LUMI ₪71.42 / NXSN ₪231.20 / MAXO / DANH auto-priced with full history.
+
+## Open items (priority order)
+1. [ ] **Healthchecks.io dead-man monitor** — pg_cron has no retry/alerting; a
+       silent stop of the dispatch jobs is invisible until filings go stale.
+2. [ ] **PAT rotation ~2026-10-14** — the fine-grained dispatch token expires;
+       refresh via Vault `update_secret` one-liner ('gh_dispatch_token').
+3. [ ] **Sano/Bio Dvash deliberate migration to yfinance** — after eyeballing
+       SANO1.TA/BHNY.TA series vs the hand-entered points (collect_enrich
+       stored the symbols, left the tier manual on purpose).
+4. [ ] **fetched_at semantics investigation** — overwritten-per-run vs
+       ON-CONFLICT-preserved is UNKNOWN (evidence destroyed by the maya
+       re-collect); nothing may be built on it until resolved (lesson 3d).
+5. [ ] **collector_runs table** — true pipeline freshness ("collectors last
+       ran"), deferred from Phase 5; today's header shows newest-item time only.
+6. [ ] Node.js 20 deprecation warnings in workflow actions (cosmetic, low).
+7. [ ] DESK news dedup upgrade: URL-unique → title-similarity (SECTORS
+       finding, deferred).
+8. [ ] CORS narrowing: ALLOWED_ORIGIN_RE `*.vercel.app` → the exact app URL
+       (low; public-data proxy, JWT on).
+- Carried over:
+  - [ ] Decide bond price source (DataHub paid EOD vs manual tier) — manual
+        tier now exists as a stopgap for unpriced securities
+  - [ ] TASE DataHub signup — no longer needed for equity tickers (ISIN
+        enrichment covers them); still the authoritative fallback and the only
+        candidate source for bonds
