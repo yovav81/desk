@@ -282,8 +282,8 @@
       bilingual search, add/remove, detail page.
       - [ ] Tighten ALLOWED_ORIGIN_RE from `*.vercel.app` to the exact app URL
             (low; see Open items).
-- [ ] Step 6c — UI polish: draggable panel divider, sticky name column, mobile
-      layout.
+- [x] Step 6c — UI polish: draggable divider, sticky name column, mobile
+      layout — DONE (2026-07-17) as Phase 7 below.
 
 ## Phase 3: SEC filings collector — DONE (2026-07-15)
 - [x] Investigation (research/SEC_COLLECTOR_FINDINGS.md): submissions endpoint,
@@ -361,27 +361,99 @@
       prices. Verified live: 8/8 resolved, 6 upgraded, 2 held manual;
       LUMI ₪71.42 / NXSN ₪231.20 / MAXO / DANH auto-priced with full history.
 
+## Phase 7: layout + mobile — DONE (2026-07-17)
+- [x] Draggable panel divider (desktop only) — SplitDivider in App.jsx:
+      pointer-capture drag, RTL-safe ABSOLUTE math (width = rect.right −
+      clientX — never movementX deltas), clamp 25–75%, keyboard accessible
+      (role=separator, ArrowRight enlarges the watchlist). Position is
+      session-state only, resets on reload — by design, no persistence.
+- [x] Sticky security column — ONE shared x-scroll container wrapping
+      header+rows (killed the header-bleed bug: headers floated over the news
+      panel below ~622px); name cell sticky insetInlineStart:0 (= right in
+      RTL), ✕ sticky at the opposite edge; edge shadows only while scrolled.
+      Side fix: header labels now align exactly over their columns (a ~10px
+      scrollbar-inset drift had existed since step 2).
+- [x] Mobile — BUILT FROM SCRATCH (the "cards already built" claim in earlier
+      docs was the design_reference MOCKUP, not code — third overturned
+      documented claim this week): useIsMobile (matchMedia 760px), tab switcher
+      רשימת מעקב/חדשות with display-toggle (panels stay mounted — no refetch on
+      tab flip), SecurityCard per mockup intent (dashes for manual, ellipsis
+      names, 40px ✕), SplitDivider rendered in the desktop tree only,
+      viewport-fit=cover in index.html for notch safe-areas. Breakpoint
+      crossing: state survives; one refetch per rotation (accepted).
+      Verified live on desktop + phone.
+
+## Phase 8: emails end-to-end + news hygiene — DONE (2026-07-17)
+- [x] **Attribution ladder** (fixed the all-C bug: symbol 'C'
+      substring-matched the 'c' in every ".com" sender — deterministic since C
+      was onboarded). Ladder: secnum > whole-word symbol (len≥2 —
+      single-letter symbols structurally excluded) > distinctive Hebrew/English
+      name tokens (gershayim-normalized, noise list) > NULL = macro.
+      Multi-match → NULL + warning. NULL-only re-attribution sweep each run;
+      never rewrites a non-NULL sec_id. One-shot cleanup ran on the 8
+      mis-tagged rows. Verified: "המניות שלי" filters emails correctly.
+- [x] **Staleness gate** — STALE_DAYS=7 at ingest in collect_news (the Jan-05
+      SAP archive case). First run measured: read=643 inserted=173
+      **skipped_stale=470 — 73% of Google News RSS is archive noise**. Gate
+      imported into collect_macro (assumption-measuring: skipped_stale=0
+      proves Globes clean). Log vocabulary fixed in both:
+      read=/inserted=(literal, via rowcount)/duplicate=/skipped_stale= — the
+      misleading new= burned us twice (maya, news); killed in these files.
+- [x] **Email bodies** — emails.body_text was ALREADY stored (full plain
+      text); only the UI was missing.
+- [x] **Attachments** — sql/004 (email_attachments + anon-read policy +
+      storage.objects authenticated-read policy); PRIVATE bucket
+      'email-attachments' (manual creation, 20MB limit); collector extracts +
+      uploads via Storage REST (requests — no supabase-py dep); 14-day
+      retention sweep (free-tier math: ~60MB/day fills 1GB in ~17 days); 20MB
+      cap (oversize → metadata-only row). **ASCII-safe object keys**
+      {email_id}/{sha1(name)[:16]}{.ext} — Hebrew keys got HTTP 400 in the
+      first live run (supabase/storage#133); the original Hebrew filename
+      lives in the metadata row. New secrets (names only):
+      SUPABASE_SERVICE_ROLE_KEY (GitHub Actions ONLY — bypasses RLS, never in
+      Vault/code) + SUPABASE_URL; wired into collect.yml env.
+- [x] **Backfill CLI** desk/email_backfill.py (dry-run default, cap 50) — ran
+      live: scanned=50 with_attachments=18 saved=22. Israeli analyst notes
+      legitimately have no attachments (the review text IS the body).
+- [x] **Viewing UI** — expand-in-place accordion in FeedItem.jsx (multi-open,
+      per-row state, survives the 3-min refresh), lazy fetch on first expand
+      (body + attachment metadata, flat queries — list query untouched), plain
+      text pre-wrap dir=auto with inner scroll, attachment chips →
+      createSignedUrl(path, 60) with the open-synchronously-then-navigate
+      Safari popup-blocker dodge; oversize rows greyed with "קובץ גדול מדי —
+      לא נשמר". Verified on desktop + phone.
+
 ## Open items (priority order)
-1. [ ] **Healthchecks.io dead-man monitor** — pg_cron has no retry/alerting; a
-       silent stop of the dispatch jobs is invisible until filings go stale.
-2. [ ] **PAT rotation ~2026-10-14** — the fine-grained dispatch token expires;
-       refresh via Vault `update_secret` one-liner ('gh_dispatch_token').
-3. [ ] **Sano/Bio Dvash deliberate migration to yfinance** — after eyeballing
+1. [ ] **Healthchecks.io dead-man monitor** (next up) — pg_cron has no
+       retry/alerting; a silent stop of the dispatch jobs is invisible until
+       filings go stale.
+2. [ ] **Sano/Bio Dvash deliberate migration to yfinance** — after eyeballing
        SANO1.TA/BHNY.TA series vs the hand-entered points (collect_enrich
        stored the symbols, left the tier manual on purpose).
-4. [ ] **fetched_at semantics investigation** — overwritten-per-run vs
-       ON-CONFLICT-preserved is UNKNOWN (evidence destroyed by the maya
-       re-collect); nothing may be built on it until resolved (lesson 3d).
+3. [ ] **Strip `[cid:...]` inline-image residue** lines from body_text at
+       collect time (cosmetic, cheap).
+4. [ ] DESK news dedup upgrade: URL-unique → title-similarity (SECTORS
+       finding, deferred).
 5. [ ] **collector_runs table** — true pipeline freshness ("collectors last
        ran"), deferred from Phase 5; today's header shows newest-item time only.
 6. [ ] Node.js 20 deprecation warnings in workflow actions (cosmetic, low).
-7. [ ] DESK news dedup upgrade: URL-unique → title-similarity (SECTORS
-       finding, deferred).
-8. [ ] CORS narrowing: ALLOWED_ORIGIN_RE `*.vercel.app` → the exact app URL
+7. [ ] CORS narrowing: ALLOWED_ORIGIN_RE `*.vercel.app` → the exact app URL
        (low; public-data proxy, JWT on).
+8. [ ] **PAT rotation ~2026-10-14** — the fine-grained dispatch token expires;
+       refresh via Vault `update_secret` one-liner ('gh_dispatch_token').
+9. [ ] **fetched_at semantics investigation** — overwritten-per-run vs
+       ON-CONFLICT-preserved is UNKNOWN (evidence destroyed by the maya
+       re-collect); nothing may be built on it until resolved (lesson 3d).
 - Carried over:
   - [ ] Decide bond price source (DataHub paid EOD vs manual tier) — manual
         tier now exists as a stopgap for unpriced securities
   - [ ] TASE DataHub signup — no longer needed for equity tickers (ISIN
         enrichment covers them); still the authoritative fallback and the only
         candidate source for bonds
+
+## Decided against (recorded so it isn't re-proposed)
+- **HTML email rendering (tables/images)** — 2026-07-17. Cost: raw HTML
+  storage, a sanitizer dependency/XSS surface, cid-image hosting, and no
+  reliable logo-vs-chart filter. Benefit: formatting only — the numbers
+  survive plain-text flattening, and the critical tables ship in the attached
+  PDFs anyway. Safe boring v1 beats rich risky v2.

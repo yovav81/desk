@@ -138,15 +138,43 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   News.jsx and Detail.jsx so the four source types can't drift apart. The detail
   feed (`useSecurityFeed(secId)` in useNews.js) filters **server-side** by
   sec_id and omits the security tag (redundant inside one security).
+  **Email rows expand in place** (accordion, multi-open, per-row state that
+  survives the 3-min refresh): body + attachment metadata are **lazy-fetched on
+  first expand** (flat queries — the list query never loads bodies) and cached
+  for the session. Body renders as **plain text only** (pre-wrap, `dir="auto"`,
+  `overflowWrap:anywhere` — nothing to sanitize, HTML was stripped at collect
+  time). Attachment chips show the ORIGINAL Hebrew filename + size and mint a
+  signed URL **per click** (`createSignedUrl(path, 60)`), opening the tab
+  **synchronously-then-navigating** — `window.open` after an `await` gets
+  popup-blocked (Safari). `storage_path` NULL = oversize, greyed with
+  "קובץ גדול מדי — לא נשמר".
+- **Layout (Phase 7):** the panel split is draggable (desktop only) via
+  `SplitDivider` — pointer capture + **RTL-safe ABSOLUTE math**
+  (`width = rect.right − clientX`; never `movementX` deltas, whose signs are
+  the classic inverted-drag bug), clamp 25–75%, keyboard accessible
+  (`role=separator`; ArrowRight enlarges the watchlist). Session-state only —
+  resets on reload by design. The watchlist table lives in **one shared
+  x-scroll container** (header INSIDE it — headers and rows can never scroll
+  apart again); the name cell is sticky at `insetInlineStart: 0` (= RIGHT in
+  RTL), the ✕ at the opposite edge, with edge shadows only while scrolled.
+- **Mobile (≤760px, the mockup's breakpoint):** `useIsMobile` (matchMedia
+  change-events only) branches ONCE at the top of Dashboard's return — the
+  desktop tree renders exactly as before. Tab switcher (רשימת מעקב/חדשות)
+  toggles `display` on always-mounted panels, so tab flips never refetch;
+  watchlist becomes `SecurityCard`s. `SplitDivider` exists only in the desktop
+  tree. `viewport-fit=cover` in index.html makes the safe-area padding real on
+  notched phones. Crossing the breakpoint keeps all Dashboard-level state; the
+  panels remount → one refetch per rotation (accepted).
 - **Freshness (Phase 5):** feed tags show `securities.name` (fallback
   `symbol || sec_id`); auto-refresh = refetch on `visibilitychange` + a 3-min
   interval, **paused while the tab is hidden** (one timer in App drives both
   data hooks via `refreshTick` — never add a second timer). The news header
   shows **"הפריט האחרון"** from `max(published_at)` — deliberately NOT "when
   the browser fetched" (that would read "עכשיו" forever and lie).
-- Current state: **deployed and live** — login, two-panel dashboard with
-  search/add/remove, detail page + chart, auto-refresh. Remaining UI work is
-  polish (6c: draggable divider, sticky column, mobile).
+- Current state: **deployed and live, desktop + mobile** — login, resizable
+  two-panel dashboard with search/add/remove, sticky-column watchlist, detail
+  page + chart, auto-refresh, mobile tabs with cards, and in-place email
+  viewing with attachments. Remaining work is in TODO's Open items.
 
 ## Architecture
 
@@ -197,6 +225,38 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   `sec_id NULL` = macro. The dashboard's three filters map to: **My stocks** =
   `category='stock'` ∩ the user's watchlist (+ their stock emails); **Macro &
   reviews** = `category='macro'` (+ unassigned emails); **All** = the union.
+- **News staleness gate** (`collect_news.is_stale`, `STALE_DAYS=7`, imported by
+  collect_macro — ONE definition): Google News RSS resurfaces archive items
+  (**73% of a measured run was stale**); anything PROVABLY older than 7 days at
+  ingest is skipped and counted, never inserted. Missing dates are NOT stale
+  (act only on proof; stored with published_at NULL as always). Ingest-only —
+  existing rows untouched. **Log vocabulary rule, learned twice:** counters are
+  named literally — `read=/inserted=/duplicate=/skipped_stale=`, where
+  `inserted=` is the true rowcount of ON CONFLICT DO NOTHING; never name a
+  read-count `new=`.
+- **Email attribution** (`collect_email.attribute_email`) — a strict confidence
+  ladder: security number as a standalone token > **whole-word** ticker
+  (len≥2 — **single-letter symbols are structurally excluded from text
+  matching**: Citigroup's 'C' substring-matched the 'c' in every ".com" sender
+  and tagged ALL email as C) > distinctive Hebrew/English name tokens
+  (gershayim-normalized `בע"מ`→`בעמ`; NOISE_TOKENS strips בנק/מערכות/Ltd/…;
+  add to it freely) > **NULL = macro**. Multi-match at any tier → NULL +
+  warning — wrong attribution is worse than none. A **NULL-only sweep** each
+  run re-attributes old emails when securities are added later; a non-NULL
+  sec_id is NEVER rewritten. Never match against sender text.
+- **Email attachments** (`collect_email` + `desk/email_backfill.py`, sql/004) —
+  files live in the **PRIVATE Storage bucket `email-attachments`** (manual
+  dashboard creation), reachable only via signed URLs (storage.objects policy:
+  `authenticated` SELECT); metadata rows in `email_attachments` (anon-read,
+  like the feed). Upload via **Storage REST with `requests`** — no supabase-py
+  dependency. **Object keys must be ASCII**: Storage 400s non-ASCII keys
+  (production-measured; supabase/storage#133), so keys are DERIVED —
+  `{email_id}/{sha1(name)[:16]}{.ext}` — and the original Hebrew filename
+  lives in the metadata row for display. 20MB cap (oversize → metadata-only
+  row, storage_path NULL); **14-day retention sweep** (free tier = 1GB;
+  ~60MB/day fills it in ~17 days) deletes objects + metadata rows only —
+  emails/body_text are never touched. Failed uploads write nothing (retry =
+  the backfill CLI, dry-run default, keyed on message_id).
 - **MAYA filings** (`desk/collect_maya.py`, `desk/maya_ids.py`,
   `desk/maya_client.py`) — company disclosure **announcements** (headline +
   date + document link) for watchlisted TASE securities. The pattern was
@@ -430,14 +490,29 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
 - **GitHub `schedule:` is best-effort and can be hours late** — measured
   74–180 min gaps on a correct cron. If timing matters, dispatch externally
   (pg_cron → workflow_dispatch) and keep the cron only as fallback.
+- **The C-substring class of bug: never substring-match short identifiers
+  against free text.** A 1-letter ticker as a match needle tagged every email
+  in the inbox as Citigroup ('c' ∈ every ".com" sender). Whole-word matching
+  with a minimum length is the floor; single-letter symbols are excluded from
+  text matching structurally, not case-by-case.
+- **A live API rejects what an offline harness passes.** The attachment
+  pipeline passed every offline test, then the FIRST real Hebrew filename got
+  HTTP 400 from Storage (non-ASCII object keys). The first production run is
+  part of verification, not a formality — watch it.
+- **"Already built" in docs can mean a mockup.** The mobile cards "already
+  built" claim referred to design_reference markup, not code — the third
+  overturned documented claim in one week (Sano tickers, the enrichment TODO,
+  mobile). Verify docs against code before building on them.
 
 ## Secrets
 
 Read from environment only, never hardcoded: `DESK_DB_URL`,
 `DESK_DEFAULT_USER`, `GMAIL_USER`, `GMAIL_APP_PASSWORD`, `SEC_USER_AGENT`
-(descriptive UA with a contact — SEC 403s without it). Documented in
-`.env.example` / `README.md`. In CI these are GitHub Actions secrets — still
-private on the public repo. The **GitHub dispatch PAT** (fine-grained,
+(descriptive UA with a contact — SEC 403s without it), `SUPABASE_URL`, and
+`SUPABASE_SERVICE_ROLE_KEY` (**bypasses RLS — GitHub Actions Secrets ONLY,
+never in Vault, never in web/, never logged; errors name the variable, never
+the value**). Documented in `.env.example` / `README.md`. In CI these are
+GitHub Actions secrets — still private on the public repo. The **GitHub dispatch PAT** (fine-grained,
 Actions:write, this repo only, expires ~2026-10-14) lives ONLY in **Supabase
 Vault** as `gh_dispatch_token` — never in the repo, never in Actions secrets;
 rotate via Vault `update_secret` (open item).
