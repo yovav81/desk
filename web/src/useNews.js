@@ -10,6 +10,17 @@ import { supabase } from './supabaseClient';
 // Read-only via the anon client. If a table returns 0 rows with NO error, that
 // is RLS (needs a read policy) — same as securities/quotes/watchlist/users.
 
+// THE 1000-ROW TRAP: PostgREST silently caps every query at the server's
+// max_rows (1000). A query with NO order and NO limit therefore returns an
+// ARBITRARY 1000-row window once the table outgrows it — in practice roughly
+// insertion order, i.e. the OLDEST rows. That is exactly how the main feed
+// froze at 15.07 while `news` sat at 1444+ rows: fresh items existed but fell
+// outside the unordered window, and the client-side sort can't recover rows it
+// never received. EVERY feed query must order newest-first server-side with an
+// explicit limit. 500/table renders no more DOM than the old cap did, and
+// covers ~a day of news + years of emails/filings at current volumes.
+const FEED_LIMIT = 500;
+
 // One mapping per source type, shared by the dashboard feed (useNews, fetches
 // everything) and the detail page (useSecurityFeed, fetches one sec_id) so both
 // speak the identical item shape.
@@ -54,10 +65,24 @@ export function useNews(refreshTick) {
     let cancelled = false;
 
     async function load() {
+      // nullsFirst:false matters: DESC ordering puts NULL dates FIRST by
+      // default, which would burn window slots on dateless rows.
       const [newsRes, emailRes, filingRes] = await Promise.all([
-        supabase.from('news').select('id, sec_id, source, title, url, published_at, category'),
-        supabase.from('emails').select('id, sec_id, sender, subject, received_at'),
-        supabase.from('filings').select('id, sec_id, source, title, doc_url, published_at'),
+        supabase
+          .from('news')
+          .select('id, sec_id, source, title, url, published_at, category')
+          .order('published_at', { ascending: false, nullsFirst: false })
+          .limit(FEED_LIMIT),
+        supabase
+          .from('emails')
+          .select('id, sec_id, sender, subject, received_at')
+          .order('received_at', { ascending: false, nullsFirst: false })
+          .limit(FEED_LIMIT),
+        supabase
+          .from('filings')
+          .select('id, sec_id, source, title, doc_url, published_at')
+          .order('published_at', { ascending: false, nullsFirst: false })
+          .limit(FEED_LIMIT),
       ]);
       if (cancelled) return;
 
@@ -110,14 +135,29 @@ export function useSecurityFeed(secId) {
     setStatus('loading');
 
     async function load() {
+      // Same 1000-row trap as the main feed (see FEED_LIMIT above): per-security
+      // subsets are far below the limit today, so results are identical — but a
+      // chatty security must age out its OLDEST items, never arbitrary ones.
       const [newsRes, emailRes, filingRes] = await Promise.all([
         supabase
           .from('news')
           .select('id, sec_id, source, title, url, published_at, category')
           .eq('sec_id', secId)
-          .eq('category', 'stock'),
-        supabase.from('emails').select('id, sec_id, sender, subject, received_at').eq('sec_id', secId),
-        supabase.from('filings').select('id, sec_id, source, title, doc_url, published_at').eq('sec_id', secId),
+          .eq('category', 'stock')
+          .order('published_at', { ascending: false, nullsFirst: false })
+          .limit(FEED_LIMIT),
+        supabase
+          .from('emails')
+          .select('id, sec_id, sender, subject, received_at')
+          .eq('sec_id', secId)
+          .order('received_at', { ascending: false, nullsFirst: false })
+          .limit(FEED_LIMIT),
+        supabase
+          .from('filings')
+          .select('id, sec_id, source, title, doc_url, published_at')
+          .eq('sec_id', secId)
+          .order('published_at', { ascending: false, nullsFirst: false })
+          .limit(FEED_LIMIT),
       ]);
       if (cancelled) return;
 
