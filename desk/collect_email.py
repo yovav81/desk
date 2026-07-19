@@ -455,7 +455,11 @@ def collect() -> None:
     reattribute_nulls(engine, secs)
     retention_deleted = prune_attachments(engine, storage_cfg)
 
-    imap = imaplib.IMAP4_SSL(IMAP_HOST)
+    # Explicit connect timeout (IMAP4_SSL supports it on 3.9+; CI is 3.12) —
+    # the run has hung here for 28m+ with zero output. Log first so a future
+    # hang shows WHERE it stopped.
+    log.info("EMAIL connecting imap.gmail.com")
+    imap = imaplib.IMAP4_SSL(IMAP_HOST, timeout=60)
     try:
         imap.login(gmail_user, gmail_pass)
         imap.select("INBOX")

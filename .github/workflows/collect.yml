@@ -39,21 +39,31 @@ jobs:
           fi
 
       - name: Collect news
+        timeout-minutes: 5
         run: python -m desk.collect_news
 
       - name: Collect macro news
+        timeout-minutes: 5
         run: python -m desk.collect_macro
 
       - name: Collect email
+        timeout-minutes: 5
         run: python -m desk.collect_email
 
       # BEFORE prices, so a just-added TASE security gets its ticker and its
       # first quote in the SAME run. Steady state (nothing to enrich) makes
       # zero Yahoo requests. --commit is required: the CLI defaults to dry-run.
+      # `if: success() || failure()` — run even if an earlier step (e.g. a hung
+      # email) failed, but NOT on cancellation. A prior failure still trips the
+      # ping (which stays success-only), so Healthchecks still alerts.
       - name: Enrich TASE tickers
+        if: ${{ success() || failure() }}
+        timeout-minutes: 10
         run: python -m desk.collect_enrich --commit
 
       - name: Collect prices
+        if: ${{ success() || failure() }}
+        timeout-minutes: 10
         run: python -m desk.collect_prices
 
       # MAYA + SEC filings moved to .github/workflows/filings.yml (5-min fast
