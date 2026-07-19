@@ -44,19 +44,23 @@ export default function App() {
 // ZERO rows everywhere. A user cannot self-approve by defeating this component.
 function ApprovalGate({ session }) {
   const [state, setState] = useState('loading'); // loading | approved | pending | error
+  const [isAdmin, setIsAdmin] = useState(false);
   const uid = session.user.id;
 
   const check = useCallback(async () => {
     setState('loading');
+    // is_admin is fetched here alongside approved (ONE fetch) and threaded to
+    // Dashboard so the admin entry point needs no second query.
     const { data, error } = await supabase
       .from('profiles')
-      .select('approved')
+      .select('approved, is_admin')
       .eq('id', uid)
       .maybeSingle();
     if (error) {
       setState('error');
       return;
     }
+    setIsAdmin(Boolean(data?.is_admin));
     // No row yet (e.g. the signup trigger hasn't landed) = not approved.
     setState(data?.approved ? 'approved' : 'pending');
   }, [uid]);
@@ -66,7 +70,7 @@ function ApprovalGate({ session }) {
   }, [check]);
 
   if (state === 'loading') return <Splash />;
-  if (state === 'approved') return <Dashboard session={session} />;
+  if (state === 'approved') return <Dashboard session={session} isAdmin={isAdmin} />;
   // pending OR error → the pending screen (error just adds a line + retry).
   return <Pending email={session.user.email} isError={state === 'error'} onRecheck={check} />;
 }
@@ -441,10 +445,15 @@ function SplitDivider({ containerRef, pct, onResize }) {
   );
 }
 
-function Dashboard({ session }) {
+function Dashboard({ session, isAdmin = false }) {
   // Bumped to trigger a refetch; threaded into the data hooks' effect deps so a
   // single timer drives both (no duplicate timers, no duplicated query logic).
   const [refreshTick, setRefreshTick] = useState(0);
+  // Admin view toggle (App-level state, no router — same pattern as openSecId).
+  // Guarded by isAdmin at render, but that is UI only: the profiles queries the
+  // admin view runs are RLS-gated on is_admin() (sql/005), so a non-admin who
+  // forced adminOpen or hit PostgREST directly still gets nothing.
+  const [adminOpen, setAdminOpen] = useState(false);
   // The logged-in auth user drives the watchlist — no hardcoded 'owner'.
   const wl = useWatchlist(session.user, refreshTick);
   // Which security's detail page is open (null = the dashboard). One page, so
@@ -488,6 +497,12 @@ function Dashboard({ session }) {
     await supabase.auth.signOut();
   }
 
+  // Admin view — full-screen sibling, before the detail/mobile branches so it
+  // works identically on desktop and the mobile tab layout.
+  if (adminOpen && isAdmin) {
+    return <Admin onBack={() => setAdminOpen(false)} currentUserId={session.user.id} />;
+  }
+
   // Resolve against the live rows so a security removed elsewhere can't leave a
   // detail page open over a row that no longer exists.
   const openSec = openSecId ? wl.rows.find((r) => r.sec_id === openSecId) : null;
@@ -523,21 +538,24 @@ function Dashboard({ session }) {
           }}
         >
           <Brand size={16} dotSize={9} />
-          <button
-            onClick={onLogout}
-            style={{
-              background: 'none',
-              border: `1px solid ${t.bd}`,
-              borderRadius: 8,
-              padding: '8px 16px',
-              fontSize: 13,
-              color: t.mut,
-              fontFamily: 'Heebo, sans-serif',
-              cursor: 'pointer',
-            }}
-          >
-            יציאה
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {isAdmin && <AdminLink onClick={() => setAdminOpen(true)} />}
+            <button
+              onClick={onLogout}
+              style={{
+                background: 'none',
+                border: `1px solid ${t.bd}`,
+                borderRadius: 8,
+                padding: '8px 16px',
+                fontSize: 13,
+                color: t.mut,
+                fontFamily: 'Heebo, sans-serif',
+                cursor: 'pointer',
+              }}
+            >
+              יציאה
+            </button>
+          </div>
         </div>
 
         {/* the two panel tabs — 48px targets, active = house gold */}
@@ -619,6 +637,7 @@ function Dashboard({ session }) {
           <span dir="ltr" style={{ fontSize: 13, color: t.mut, fontFamily: "'IBM Plex Mono', monospace" }}>
             {session.user.email}
           </span>
+          {isAdmin && <AdminLink onClick={() => setAdminOpen(true)} />}
           <button
             onClick={onLogout}
             style={{
@@ -655,5 +674,237 @@ function Dashboard({ session }) {
         </div>
       </div>
     </div>
+  );
+}
+
+// Admin entry point — rendered only when isAdmin (cosmetic; RLS is the boundary).
+function AdminLink({ onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        background: t.accSoft,
+        border: `1px solid ${t.accDim}`,
+        borderRadius: 8,
+        padding: '6px 14px',
+        fontSize: 13,
+        fontWeight: 600,
+        color: t.acc,
+        fontFamily: 'Heebo, sans-serif',
+        cursor: 'pointer',
+      }}
+    >
+      ניהול
+    </button>
+  );
+}
+
+// Admin page: the user-approval console. This is UI over the sql/005 RLS — the
+// profiles select-all and update are gated on is_admin() in the DB, so a
+// non-admin who reached these queries (forced adminOpen, direct PostgREST)
+// reads nothing and writes nothing. The hidden button is convenience, not the
+// security boundary. `email` comes straight off profiles (the signup trigger
+// copies it), so no auth.users read / definer function is needed.
+function Admin({ onBack, currentUserId }) {
+  const [rows, setRows] = useState([]);
+  const [status, setStatus] = useState('loading'); // loading | ready | error
+  const [err, setErr] = useState('');
+
+  async function load() {
+    setStatus('loading');
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id, email, approved, can_see_emails, is_admin, created_at')
+      .order('created_at', { ascending: false });
+    if (error) {
+      setErr('שגיאה בטעינת המשתמשים');
+      setStatus('error');
+      return;
+    }
+    setRows(data || []);
+    setStatus('ready');
+  }
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function setFlag(id, field, value) {
+    setErr('');
+    const prev = rows;
+    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, [field]: value } : r))); // optimistic
+    const { error } = await supabase.from('profiles').update({ [field]: value }).eq('id', id);
+    if (error) {
+      setRows(prev); // rollback
+      setErr('העדכון נכשל — נסו שוב');
+    }
+  }
+
+  const pending = rows.filter((r) => !r.approved);
+  const approved = rows.filter((r) => r.approved);
+
+  return (
+    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: t.bg, color: t.txt, overflow: 'hidden' }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 14,
+          padding: '14px 24px',
+          borderBottom: `1px solid ${t.bd}`,
+          flexShrink: 0,
+        }}
+      >
+        <button
+          onClick={onBack}
+          style={{
+            background: 'none',
+            border: `1px solid ${t.bd}`,
+            borderRadius: 8,
+            padding: '6px 14px',
+            fontSize: 13,
+            color: t.mut,
+            fontFamily: 'Heebo, sans-serif',
+            cursor: 'pointer',
+          }}
+        >
+          חזרה לדשבורד →
+        </button>
+        <div style={{ fontSize: 17, fontWeight: 700 }}>ניהול משתמשים</div>
+      </div>
+
+      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: '20px 24px 40px' }}>
+        {status === 'loading' && <div style={{ color: t.mut }}>טוען…</div>}
+        {status === 'error' && <div style={{ color: t.red }}>{err}</div>}
+        {status === 'ready' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 26, maxWidth: 720 }}>
+            {err && <div style={{ fontSize: 13, color: t.red }}>{err}</div>}
+
+            <AdminSection
+              title="ממתינים לאישור"
+              count={pending.length}
+              rows={pending}
+              currentUserId={currentUserId}
+              onFlag={setFlag}
+              emptyText="אין משתמשים הממתינים לאישור"
+            />
+            <AdminSection
+              title="מאושרים"
+              count={approved.length}
+              rows={approved}
+              currentUserId={currentUserId}
+              onFlag={setFlag}
+              emptyText="אין משתמשים מאושרים"
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AdminSection({ title, count, rows, currentUserId, onFlag, emptyText }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ fontSize: 15, fontWeight: 700 }}>{title}</div>
+        <div
+          style={{
+            fontSize: 12,
+            fontWeight: 600,
+            color: t.acc,
+            background: t.accSoft,
+            border: `1px solid ${t.accDim}`,
+            borderRadius: 999,
+            padding: '1px 9px',
+          }}
+        >
+          {count}
+        </div>
+      </div>
+      {rows.length === 0 ? (
+        <div style={{ fontSize: 13, color: t.mut }}>{emptyText}</div>
+      ) : (
+        rows.map((r) => <AdminRow key={r.id} r={r} isSelf={r.id === currentUserId} onFlag={onFlag} />)
+      )}
+    </div>
+  );
+}
+
+function AdminRow({ r, isSelf, onFlag }) {
+  const dt = r.created_at ? new Date(r.created_at) : null;
+  const date = dt && !Number.isNaN(dt.getTime())
+    ? `${String(dt.getDate()).padStart(2, '0')}.${String(dt.getMonth() + 1).padStart(2, '0')}.${dt.getFullYear()}`
+    : '';
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        flexWrap: 'wrap',
+        padding: '12px 14px',
+        border: `1px solid ${t.bd}`,
+        borderRadius: 10,
+        background: t.surf,
+      }}
+    >
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div dir="ltr" style={{ fontSize: 14, color: t.txt, textAlign: 'right', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {r.email || r.id}
+          {isSelf && <span style={{ color: t.mut }}> (אתה)</span>}
+          {r.is_admin && <span style={{ color: t.acc }}> · מנהל</span>}
+        </div>
+        {date && <div style={{ fontSize: 11.5, color: t.mut }}>נרשם {date}</div>}
+      </div>
+      {/* approved: disabled on the admin's OWN row — un-approving yourself would
+          drop you to the pending screen (which has no admin button) = lockout. */}
+      <FlagToggle
+        label="מאושר"
+        on={r.approved}
+        disabled={isSelf}
+        disabledNote={isSelf ? 'לא ניתן לבטל אישור עצמי' : ''}
+        onToggle={() => onFlag(r.id, 'approved', !r.approved)}
+      />
+      {/* email access requires approved (encoded in the DB's can_see_emails());
+          granting it to an unapproved user has no effect, so the toggle is
+          disabled until approved — honest about what the flag can do. */}
+      <FlagToggle
+        label="רואה מיילים"
+        on={r.can_see_emails}
+        disabled={!r.approved}
+        disabledNote={!r.approved ? 'דורש אישור תחילה' : ''}
+        onToggle={() => onFlag(r.id, 'can_see_emails', !r.can_see_emails)}
+      />
+    </div>
+  );
+}
+
+// Two-state pill. "on" uses the GOLD accent (grn/red stay reserved for returns).
+function FlagToggle({ label, on, disabled, disabledNote, onToggle }) {
+  return (
+    <button
+      onClick={disabled ? undefined : onToggle}
+      disabled={disabled}
+      title={disabledNote || ''}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '7px 12px',
+        borderRadius: 999,
+        fontSize: 12.5,
+        fontWeight: 600,
+        fontFamily: 'Heebo, sans-serif',
+        border: `1px solid ${on ? t.accDim : t.bd}`,
+        background: on ? t.accSoft : 'transparent',
+        color: disabled ? t.mut : on ? t.acc : t.txt,
+        cursor: disabled ? 'default' : 'pointer',
+        opacity: disabled ? 0.55 : 1,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <span>{on ? '✓' : '○'}</span>
+      {label}
+    </button>
   );
 }
