@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { theme as t } from './theme';
 import SearchBox from './SearchBox';
 import SecurityCard from './SecurityCard';
@@ -100,6 +100,109 @@ export default function Watchlist({ rows = [], status = 'loading', error = '', o
     [ids[i], ids[j]] = [ids[j], ids[i]];
     onReorder?.(ids);
   }
+  function sendTop(secId) {
+    const ids = rows.map((r) => r.sec_id);
+    const i = ids.indexOf(secId);
+    if (i <= 0) return;
+    ids.splice(i, 1);
+    ids.unshift(secId);
+    onReorder?.(ids);
+  }
+
+  // --- drag reorder (Phase 13C) — house pattern: Pointer Events + capture, as
+  // in SplitDivider. Purely vertical, so no RTL math is involved. Transforms
+  // are applied DIRECTLY to the DOM during the drag (no React re-render per
+  // move = no layout thrash); the drop commits once through onReorder, which
+  // re-renders the new order and the cleared styles win.
+  const listRef = useRef(null); // whichever list is mounted (table scroller / cards column)
+  const dragRef = useRef(null);
+
+  function dragStart(e, secId) {
+    const list = listRef.current;
+    if (!list || dragRef.current) return;
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const els = [...list.querySelectorAll('[data-drag-id]')];
+    const ids = els.map((el) => el.dataset.dragId);
+    const from = ids.indexOf(String(secId));
+    if (from < 0) return;
+    const rects = els.map((el) => el.getBoundingClientRect());
+    dragRef.current = {
+      els, ids, rects, from, to: from,
+      h: rects[from].height,
+      pitch: rects.length > 1 ? rects[1].top - rects[0].top : rects[from].height,
+      startY: e.clientY, lastY: e.clientY, startScroll: list.scrollTop, raf: 0,
+    };
+  }
+
+  function dragRender() {
+    const d = dragRef.current;
+    if (!d) return;
+    const dy = d.lastY - d.startY + (listRef.current.scrollTop - d.startScroll);
+    const center = d.rects[d.from].top + d.h / 2 + dy;
+    let to = d.from;
+    d.rects.forEach((r, i) => {
+      const mid = r.top + r.height / 2;
+      if (i < d.from && center < mid) to = Math.min(to, i);
+      if (i > d.from && center > mid) to = Math.max(to, i);
+    });
+    d.to = to;
+    d.els.forEach((el, i) => {
+      if (i === d.from) {
+        el.style.transition = 'none';
+        el.style.transform = `translateY(${dy}px) scale(1.02)`;
+        el.style.zIndex = 5;
+        el.style.position = 'relative';
+        el.style.boxShadow = '0 6px 16px rgba(0,0,0,0.5)';
+      } else {
+        el.style.transition = 'transform 120ms';
+        el.style.transform =
+          i > d.from && i <= to ? `translateY(${-d.pitch}px)`
+          : i < d.from && i >= to ? `translateY(${d.pitch}px)` : '';
+      }
+    });
+  }
+
+  function dragMove(e) {
+    const d = dragRef.current;
+    if (!d) return;
+    d.lastY = e.clientY;
+    // Auto-scroll while hovering within 48px of the list's top/bottom edge —
+    // a rAF loop, so it keeps scrolling while the pointer holds still there.
+    const rect = listRef.current.getBoundingClientRect();
+    const dir = e.clientY < rect.top + 48 ? -1 : e.clientY > rect.bottom - 48 ? 1 : 0;
+    cancelAnimationFrame(d.raf);
+    if (dir) {
+      const step = () => {
+        if (!dragRef.current) return;
+        listRef.current.scrollTop += dir * 8;
+        dragRender();
+        d.raf = requestAnimationFrame(step);
+      };
+      d.raf = requestAnimationFrame(step);
+    }
+    dragRender();
+  }
+
+  function dragEnd() {
+    const d = dragRef.current;
+    dragRef.current = null;
+    if (!d) return;
+    cancelAnimationFrame(d.raf);
+    d.els.forEach((el) => {
+      el.style.transform = ''; el.style.transition = ''; el.style.zIndex = '';
+      el.style.position = ''; el.style.boxShadow = '';
+    });
+    if (d.to !== d.from) {
+      const ids = [...d.ids];
+      const [moved] = ids.splice(d.from, 1);
+      ids.splice(d.to, 0, moved);
+      onReorder?.(ids);
+    }
+  }
+
+  // One bundle for the per-row handles (both renderers share it).
+  const reorderCtl = { start: dragStart, move: dragMove, end: dragEnd, step: move, top: sendTop };
   const q = query.trim().toLowerCase();
   const view = editMode
     ? rows
@@ -204,6 +307,7 @@ export default function Watchlist({ rows = [], status = 'loading', error = '', o
       {status === 'ready' && rows.length > 0 && mobile && (
         <div
           className="momentum"
+          ref={listRef}
           style={{
             flex: 1,
             minHeight: 0,
@@ -216,7 +320,7 @@ export default function Watchlist({ rows = [], status = 'loading', error = '', o
           }}
         >
           {view.map((sec) => (
-            <SecurityCard key={sec.sec_id} sec={sec} onRemove={onRemove} onOpen={onOpen} editMode={editMode} onMove={move} />
+            <SecurityCard key={sec.sec_id} sec={sec} onRemove={onRemove} onOpen={onOpen} editMode={editMode} onMove={reorderCtl} />
           ))}
         </div>
       )}
@@ -226,7 +330,7 @@ export default function Watchlist({ rows = [], status = 'loading', error = '', o
         // they x-scroll together (kills the header-bleed bug where the header
         // stayed in flow while rows scrolled). The header keeps its old
         // "fixed above the rows" feel via position:sticky top:0.
-        <div onScroll={onTableScroll} style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+        <div onScroll={onTableScroll} ref={listRef} style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
           {/* ALIGNMENT GUARANTEE: header and every row share the same GRID
               template AND stretch to this wrapper's width (flex column,
               default align-stretch). minWidth:'min-content' makes the wrapper
@@ -236,7 +340,7 @@ export default function Watchlist({ rows = [], status = 'loading', error = '', o
           <div style={{ minWidth: 'min-content', display: 'flex', flexDirection: 'column' }}>
             <HeaderRow xScrolled={xScrolled} sort={sort} onSort={toggleSort} />
             {view.map((sec) => (
-              <Row key={sec.sec_id} sec={sec} onRemove={onRemove} onOpen={onOpen} xScrolled={xScrolled} editMode={editMode} onMove={move} />
+              <Row key={sec.sec_id} sec={sec} onRemove={onRemove} onOpen={onOpen} xScrolled={xScrolled} editMode={editMode} onMove={reorderCtl} />
             ))}
           </div>
         </div>
@@ -333,6 +437,7 @@ function Row({ sec, onRemove, onOpen, xScrolled, editMode, onMove }) {
 
   return (
     <div
+      data-drag-id={sec.sec_id}
       onClick={() => onOpen?.(sec.sec_id)}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
@@ -470,8 +575,10 @@ function Row({ sec, onRemove, onOpen, xScrolled, editMode, onMove }) {
           boxShadow: xScrolled ? SHADOW_REMOVE_EDGE : 'none',
         }}
       >
+        {/* Dragged rows get an inline transform, so the sticky cell backgrounds
+            still track hover correctly; outside edit mode nothing changes. */}
         {editMode ? (
-          <MoveArrows onUp={() => onMove(sec.sec_id, -1)} onDown={() => onMove(sec.sec_id, 1)} />
+          <ReorderHandles secId={sec.sec_id} ctl={onMove} />
         ) : (
           <RemoveButton
             onClick={(e) => {
@@ -498,17 +605,34 @@ function ctlBtn(active) {
   };
 }
 
-// Native <button>s: focusable, Enter/Space activate for free. stopPropagation
-// on the wrapper so a move never also opens the detail page.
-export function MoveArrows({ onUp, onDown }) {
+// Per-row reorder controls: ⤒ send-to-top (native button — Enter works free)
+// and the ≡ drag handle. Drag starts ONLY on the handle (rows stay scrollable
+// elsewhere); touch-action:none stops page scroll during a touch drag; the
+// keyboard path is the 13B stepping — ArrowUp/Down on the focused handle.
+export function ReorderHandles({ secId, ctl }) {
   const b = {
     background: 'none', border: `1px solid ${t.bd}`, borderRadius: 5, color: t.txt,
-    fontSize: 10, cursor: 'pointer', padding: '2px 5px', fontFamily: 'Heebo, sans-serif',
+    fontSize: 12, cursor: 'pointer', padding: '2px 6px', fontFamily: 'Heebo, sans-serif',
   };
   return (
-    <div style={{ display: 'flex', gap: 3, flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
-      <button title="הזזה למעלה" onClick={onUp} style={b}>▲</button>
-      <button title="הזזה למטה" onClick={onDown} style={b}>▼</button>
+    <div style={{ display: 'flex', gap: 3, flexShrink: 0, alignItems: 'center' }} onClick={(e) => e.stopPropagation()}>
+      <button title="העברה לראש הרשימה" onClick={() => ctl.top(secId)} style={b}>⤒</button>
+      <div
+        role="button"
+        tabIndex={0}
+        aria-label="גרירה לסידור (חיצים למעלה/למטה במקלדת)"
+        onPointerDown={(e) => ctl.start(e, secId)}
+        onPointerMove={ctl.move}
+        onPointerUp={ctl.end}
+        onPointerCancel={ctl.end}
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowUp') { e.preventDefault(); ctl.step(secId, -1); }
+          if (e.key === 'ArrowDown') { e.preventDefault(); ctl.step(secId, 1); }
+        }}
+        style={{ ...b, cursor: 'grab', touchAction: 'none', userSelect: 'none' }}
+      >
+        ≡
+      </div>
     </div>
   );
 }

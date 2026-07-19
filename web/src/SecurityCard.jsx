@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { theme as t } from './theme';
 import { RET_KEYS, ccySymbol, displayName, fmtPct, fmtPrice, retColor, subLine } from './format';
-// Circular-safe: MoveArrows is a hoisted function export, only touched at render.
-import { MoveArrows } from './Watchlist';
+// Circular-safe: ReorderHandles is a hoisted function export, only touched at render.
+import { ReorderHandles } from './Watchlist';
 
 // Mobile watchlist card — follows the design_reference mockup's card intent
 // (name+sub+badge / price+day / 4-col returns grid under a top border).
@@ -23,6 +23,7 @@ export default function SecurityCard({ sec, onRemove, onOpen, editMode, onMove }
 
   return (
     <div
+      data-drag-id={sec.sec_id}
       onClick={() => onOpen?.(sec.sec_id)}
       onTouchStart={() => setPressed(true)}
       onTouchEnd={() => setPressed(false)}
@@ -106,7 +107,7 @@ export default function SecurityCard({ sec, onRemove, onOpen, editMode, onMove }
           )}
         </div>
         {editMode ? (
-          <MoveArrows onUp={() => onMove(sec.sec_id, -1)} onDown={() => onMove(sec.sec_id, 1)} />
+          <ReorderHandles secId={sec.sec_id} ctl={onMove} />
         ) : (
         <button
           onClick={(e) => {
