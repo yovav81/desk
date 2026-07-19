@@ -1,4 +1,7 @@
-"""Collect news for every security on any user's watchlist via Google News RSS.
+"""Collect news for every security on any user's watchlist.
+
+Routing by market: US -> Finnhub company-news (FINNHUB_API_KEY; falls back to
+Google News if the key is missing); TASE/GLOBAL -> Google News RSS.
 
 Raw data only: no LLM calls, no summarization. `summary` is always left NULL.
 Dedup guard: news.url is UNIQUE; INSERT ... ON CONFLICT(url) DO NOTHING.
@@ -6,7 +9,10 @@ Dedup guard: news.url is UNIQUE; INSERT ... ON CONFLICT(url) DO NOTHING.
 For TASE securities, results are best when data/securities.csv's `name`
 column is in Hebrew (Google News hl/gl is set to he/IL for market=TASE).
 """
+import json
 import logging
+import os
+import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
@@ -79,6 +85,25 @@ def fetch_feed(url: str) -> list[dict]:
     return items
 
 
+def fetch_finnhub(symbol: str, key: str, now: datetime) -> list[dict]:
+    """Finnhub company-news, last STALE_DAYS days. datetime is unix seconds UTC."""
+    frm = (now - timedelta(days=STALE_DAYS)).date().isoformat()
+    url = (
+        "https://finnhub.io/api/v1/company-news"
+        f"?symbol={quote(symbol)}&from={frm}&to={now.date().isoformat()}&token={key}"
+    )
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        data = json.loads(r.read())
+    items = []
+    for it in data:
+        title, link, ts = it.get("headline"), it.get("url"), it.get("datetime")
+        published_at = datetime.fromtimestamp(ts, tz=timezone.utc) if ts else None
+        if title and link:
+            items.append({"title": title, "url": link, "published_at": published_at})
+    return items
+
+
 def collect() -> None:
     engine = get_engine()
     init_db(engine)
@@ -86,11 +111,23 @@ def collect() -> None:
     log.info("securities on watchlists: %d", len(secs))
 
     now = datetime.now(timezone.utc)
+    finnhub_key = os.environ.get("FINNHUB_API_KEY", "")
+    if not finnhub_key and any(s["market"] == "US" for s in secs):
+        log.warning("NEWS finnhub key missing — falling back to Google News for US")
+
     total_read = total_inserted = total_dup = total_stale = 0
     for sec in secs:
-        url = rss_url_for(sec)
+        use_finnhub = sec["market"] == "US" and bool(finnhub_key)
         try:
-            items = fetch_feed(url)
+            if use_finnhub:
+                items = fetch_finnhub(sec["symbol"], finnhub_key, now)
+            else:
+                items = fetch_feed(rss_url_for(sec))
+        except urllib.error.HTTPError as e:
+            log.warning("finnhub HTTP %d for %s (%s) — skipped" if use_finnhub
+                        else "feed HTTP %d for %s (%s) — skipped",
+                        e.code, sec["sec_id"], sec["name"])
+            continue
         except Exception as e:
             log.warning("feed failed for %s (%s): %s", sec["sec_id"], sec["name"], e)
             continue
@@ -107,7 +144,7 @@ def collect() -> None:
                     continue
                 stmt = insert_ignore(engine, news, ["url"]).values(
                     sec_id=sec["sec_id"],
-                    source="google_news",
+                    source="finnhub" if use_finnhub else "google_news",
                     title=it["title"],
                     url=it["url"],
                     published_at=it["published_at"],

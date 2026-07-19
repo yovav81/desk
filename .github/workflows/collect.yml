@@ -40,6 +40,8 @@ jobs:
 
       - name: Collect news
         timeout-minutes: 5
+        env:
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
         run: python -m desk.collect_news
 
       - name: Collect macro news
