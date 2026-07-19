@@ -41,11 +41,15 @@ const SHADOW_REMOVE_EDGE = '8px 0 8px -8px rgba(0, 0, 0, 0.55)';
 const SORT_COLS = [
   { key: 'name', label: 'נייר', num: false },
   { key: 'last_price', label: 'מחיר', num: true },
+  { key: 'day_change_pct', label: 'יומי', num: true },
   ...RET_KEYS.map((r) => ({ key: r.key, label: r.label, num: true })),
 ];
 
 function sortValue(sec, key) {
-  return key === 'name' ? displayName(sec) || null : sec.quote?.[key] ?? null;
+  if (key === 'name') return displayName(sec) || null;
+  // The daily cell renders '—' for manual-tier rows — sort them as NULL too.
+  if (key === 'day_change_pct' && sec.price_source === 'manual') return null;
+  return sec.quote?.[key] ?? null;
 }
 
 function applySort(rows, sort) {
@@ -266,7 +270,6 @@ function HeaderRow({ xScrolled, sort, onSort }) {
         }}
       />
       <SortLabel col={priceCol} sort={sort} onSort={onSort} style={cell} />
-      <div style={cell}>יומי</div>
       {retCols.map((c) => (
         <SortLabel key={c.key} col={c} sort={sort} onSort={onSort} style={cell} />
       ))}
