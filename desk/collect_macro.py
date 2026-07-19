@@ -31,12 +31,14 @@ log = logging.getLogger("collect_macro")
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) DeskCollector/0.1"
 
-# (source_label, url). Globes iID sections: 2 = home page / general economy,
-# 585 = capital markets & investments. Both Hebrew, verified alive.
+# (source_label, url). Globes iID 2 = home page / general economy (alive).
+# globes_markets (iID=585) went silent 2026-07-14 and is retired — replaced by
+# Ynet's economy RSS. Both Hebrew UTF-8; pubDate is RFC822 with an explicit
+# offset, parsed tz-aware by fetch_feed. Add more feeds by extending this list.
 GLOBES_RSS = "https://www.globes.co.il/webservice/rss/rssfeeder.asmx/FeederNode?iID={iid}"
 MACRO_FEEDS = [
     ("globes_home", GLOBES_RSS.format(iid=2)),
-    ("globes_markets", GLOBES_RSS.format(iid=585)),
+    ("ynet_economy", "https://www.ynet.co.il/Integration/StoryRss6.xml"),
 ]
 
 
@@ -97,10 +99,15 @@ def collect() -> None:
         total_inserted += inserted
         total_dup += dup
         total_stale += stale
-        log.info(
-            "%s: read=%d inserted=%d duplicate=%d skipped_stale=%d",
-            source, len(items), inserted, dup, stale,
-        )
+        # read=0 must scream: a live feed returning nothing is how globes_markets
+        # died silently for days.
+        if len(items) == 0:
+            log.warning("MACRO %s read=0 — FEED SILENT", source)
+        else:
+            log.info(
+                "MACRO %s read=%d inserted=%d duplicate=%d skipped_stale=%d",
+                source, len(items), inserted, dup, stale,
+            )
 
     log.info(
         "done: read=%d inserted=%d duplicate=%d skipped_stale=%d",
