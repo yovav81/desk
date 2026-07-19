@@ -423,17 +423,77 @@
       Safari popup-blocker dodge; oversize rows greyed with "קובץ גדול מדי —
       לא נשמר". Verified on desktop + phone.
 
+## Phases 9–10: signup approval + admin — DONE (pre-2026-07-19, see git history)
+- [x] Signup screen + three-way approval gate (login/pending/dashboard);
+      Admin page (pending list, approve/email toggles, self-lockout guard);
+      sql/005 (+rollback). research/SIGNUP_APPROVAL_FINDINGS.md.
+
+## Phase 11: returns corruption — root cause + unit-jump guard — DONE (2026-07-19)
+- [x] Root cause: Yahoo returned a MIXED-UNIT series (agorot for one segment,
+      ILS for the rest — a single ~×100 step at 2026-05-18), inflating period
+      returns computed across the jump (NXSN y12 17390.7%, ytd 11057.7%).
+- [x] Guard `normalize_unit_jumps()` in collect_prices.py: consecutive-close
+      ratio ≥50 or ≤0.02 → rescale the pre-jump segment; MULTIPLE jumps →
+      returns skipped (quote fields still written) — never guessed.
+- [x] Data repair: 8 corrupt price_history tail rows deleted (2 NXSN +
+      6 DANH). Verified in prod: NXSN y12 74.9%, ytd 11.58%.
+      Findings: research/RETURNS_CORRUPTION_FINDINGS.md.
+
+## Phase 12: news sources by market + pipeline hardening — DONE (2026-07-19)
+- [x] 12A — ynet_economy RSS replaces dead globes_markets (silent since
+      2026-07-14) in collect_macro; per-feed summary line + "read=0 — FEED
+      SILENT" warning (a dead feed must scream).
+- [x] 12B — US → Finnhub company-news (secret FINNHUB_API_KEY; missing key →
+      one warning + Google News fallback); TASE stays Google News.
+- [x] 12C (+FIX, FIX2) — GLOBAL → GDELT: batched 6 names/call (timespan=3d,
+      maxrecords=75), relevance guard (ALL name tokens len≥3 in title, else
+      skipped_offtopic), 20s per-call timeout, 429 circuit breaker (3
+      consecutive → skip remaining GLOBAL this run), hourly gate (active only
+      when UTC minute<15 = the :02 dispatch run; GDELT_FORCE=1 override) —
+      CI runner IPs are intermittently throttled, not permanently blocked.
+      gdelt_macro world feed in collect_macro behind the same gate.
+- [x] 12D — near-duplicate title suppression at write time: norm_tokens /
+      is_similar (Jaccard≥0.75 AND ≥4 shared tokens), 72h window, per-sec_id
+      groups + macro group, counter skipped_similar — 1,083 caught in the
+      first full-scale run. (Closes old Open item 4, "news dedup upgrade".)
+- [x] 12A-H/H2 — per-step timeout-minutes (news 15 after the scale test,
+      macro/email 5, enrich/prices 10); enrich+prices run past a prior step
+      failure (`if: success() || failure()` — not on cancel); ping stays
+      success-only; IMAP4_SSL(timeout=60); PYTHONUNBUFFERED=1 at job level;
+      EMAIL per-phase forensic log lines (connect/login/select/search/
+      fetch i/n/storage upload). Documented gaps: DNS resolution precedes the
+      socket timeout; the 60s timeout is per-read. The email hang is
+      intermittent — forensics armed, the next hang pinpoints itself.
+- Scale note: watchlists now at 162 securities; full collect green in ~10m
+  (news 6m19s).
+
+## Phase 13: watchlist UX — sort, search, manual order — DONE (2026-07-19)
+- [x] 13 (+FIX) — column sorting, 7 columns incl. daily (numeric first-click
+      desc, name asc via localeCompare('he'), NULLs last both directions,
+      ▲/▼ indicator, keyboard accessible); live in-list search on name/symbol
+      (✕ + Escape clear); mobile: same search + a compact sort select.
+- [x] 13B — persistent per-user manual order: watchlist.position (sql/006 +
+      sql/006b UPDATE grant+policy, both applied in prod) = the default order
+      ("הסדר שלי"); header sorts overlay it in-memory; search composes with
+      either; adds append at max+1; ONE debounced (~1.5s) batched upsert of
+      changed positions; error → toast + revert to server state.
+- [x] 13C — reorder mode v2: drag handle (pointer capture, direct-DOM
+      transforms, auto-scroll near list edges, drop commits once) +
+      send-to-top ⤒; ArrowUp/Down stepping on the focused handle preserved as
+      the keyboard path. Verified desktop + mobile.
+
 ## Open items (priority order)
-1. [ ] **Healthchecks.io dead-man monitor** (next up) — pg_cron has no
-       retry/alerting; a silent stop of the dispatch jobs is invisible until
-       filings go stale.
+1. [x] **Healthchecks.io dead-man monitor** — collect.yml pings
+       HC_PING_COLLECT as its success-only LAST step (silence = alarm).
+       (Verify the filings lane has its own ping if not yet wired — not
+       confirmed from this session.)
 2. [ ] **Sano/Bio Dvash deliberate migration to yfinance** — after eyeballing
        SANO1.TA/BHNY.TA series vs the hand-entered points (collect_enrich
        stored the symbols, left the tier manual on purpose).
 3. [ ] **Strip `[cid:...]` inline-image residue** lines from body_text at
        collect time (cosmetic, cheap).
-4. [ ] DESK news dedup upgrade: URL-unique → title-similarity (SECTORS
-       finding, deferred).
+4. [x] DESK news dedup upgrade: URL-unique → title-similarity — DONE by
+       Phase 12D (2026-07-19).
 5. [ ] **collector_runs table** — true pipeline freshness ("collectors last
        ran"), deferred from Phase 5; today's header shows newest-item time only.
 6. [ ] Node.js 20 deprecation warnings in workflow actions (cosmetic, low).
@@ -444,6 +504,16 @@
 9. [ ] **fetched_at semantics investigation** — overwritten-per-run vs
        ON-CONFLICT-preserved is UNKNOWN (evidence destroyed by the maya
        re-collect); nothing may be built on it until resolved (lesson 3d).
+10. [ ] **Email-attribution blocklist for word-symbols** (IT, NOW, COST,
+        FIX…) — born 2026-07-19: multi-match already → NULL, but a SINGLE
+        English-word ticker matching ordinary prose can misattribute; add a
+        structural blocklist tier (like the single-letter exclusion).
+11. [ ] **News retention policy** — decide 60–90d and prune; at 162
+        securities the news table grows unboundedly.
+12. [ ] **GDELT decision gate** — if source='gdelt' still ~0 rows after 2-3
+        days of the hourly gate -> plan C for GLOBAL news: Google News
+        fallback on circuit-open, or Marketaux (100 req/day tier). Check via:
+        `select count(*) from news where source='gdelt';`
 - Carried over:
   - [ ] Decide bond price source (DataHub paid EOD vs manual tier) — manual
         tier now exists as a stopgap for unpriced securities

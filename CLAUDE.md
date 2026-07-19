@@ -9,7 +9,8 @@ system — always out of scope for this project.
 push; Supabase = auth + Postgres + Edge Function). All collectors run in the
 cloud: news/macro/email/enrich/prices + MAYA & SEC filings, dispatched by
 **Supabase pg_cron** (the primary clock — GitHub `schedule:` is best-effort
-fallback only). Phases 0–6 done; history and open items in `TODO.md`.
+fallback only). Phases 0–13 done (162 securities on watchlists; full collect
+green in ~10m); history and open items in `TODO.md`.
 
 ## Folder isolation
 
@@ -117,8 +118,9 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   needs INSERT on `securities`, INSERT/DELETE on `watchlist`, **USAGE on
   `watchlist_id_seq`** (SERIAL pk — inserts fail without it). `watchlist`
   policies are **per-user** via auth.uid()→users.id (sql/6b-1, verified live:
-  a second user sees an empty watchlist); `securities` INSERT stays open to
-  authenticated by design (shared pool).
+  a second user sees an empty watchlist); `watchlist` **UPDATE** (manual
+  ordering, Phase 13B) via sql/006b — same ownership check; `securities`
+  INSERT stays open to authenticated by design (shared pool).
 - **Security detail page** (`web/src/Detail.jsx`, `Chart.jsx`,
   `usePriceHistory.js`) — full-screen, reached by clicking a watchlist row
   (`openSecId` state in App; one page, **no router**). The × calls
@@ -171,10 +173,27 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   data hooks via `refreshTick` — never add a second timer). The news header
   shows **"הפריט האחרון"** from `max(published_at)` — deliberately NOT "when
   the browser fetched" (that would read "עכשיו" forever and lie).
-- Current state: **deployed and live, desktop + mobile** — login, resizable
-  two-panel dashboard with search/add/remove, sticky-column watchlist, detail
-  page + chart, auto-refresh, mobile tabs with cards, and in-place email
-  viewing with attachments. Remaining work is in TODO's Open items.
+- **Watchlist UX (Phase 13):** column sorting on all 7 columns incl. daily
+  (numeric first-click desc, name asc via `localeCompare('he')` on
+  `displayName` — sorts what's displayed; NULLs always last; manual-tier
+  daily sorts as NULL because the cell renders '—'; ▲/▼ rides the text flow
+  so the sticky column is untouched); live in-list filter (name/symbol
+  substring, ✕ + Escape clear); **persistent per-user manual order** —
+  `watchlist.position` (sql/006 + UPDATE policy sql/006b, both applied) is
+  THE default order ("הסדר שלי"); header sorts overlay it in-memory, search
+  filters whichever order is active, adds append at max+1. Reorder mode
+  ("סידור") clears sort+filter (moves on a sorted/filtered view are
+  ambiguous) and gives each row a **drag handle** (pointer capture,
+  direct-DOM transforms — no per-move re-render, edge auto-scroll, drop
+  commits once) + **send-to-top ⤒**; ArrowUp/Down on the focused handle is
+  the keyboard path. Persistence = ONE debounced (~1.5s) batched upsert of
+  changed positions; error → toast + revert to server state. Mobile: same
+  filter + a compact sort select; cards get the same reorder handles.
+- Current state: **deployed and live, desktop + mobile** — login + signup
+  approval gate, resizable two-panel dashboard with search/add/remove,
+  sticky-column watchlist with sorting/filtering and per-user drag ordering,
+  detail page + chart, auto-refresh, mobile tabs with cards, and in-place
+  email viewing with attachments. Remaining work is in TODO's Open items.
 
 ## Architecture
 
@@ -197,8 +216,16 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   security gets ticker + first quote in the same run);
   `filings.yml` = MAYA + SEC (the time-sensitive lane; SEC last because it's
   the only step with a hard-fail config mode); `tase_list.yml` = daily TASE
-  registry sweep. House pattern: secrets at job level, no `continue-on-error`
-  (a failing step skips the rest), every collector internally fail-soft.
+  registry sweep. House pattern: secrets at job level, no `continue-on-error`,
+  every collector internally fail-soft. **Hardening (12A-H/H2):** per-step
+  `timeout-minutes` (news 15 — measured at 162-security scale; macro/email 5;
+  enrich/prices 10); enrich+prices run `if: success() || failure()` so a hung
+  email can't starve prices (not on cancel); the Healthchecks ping stays
+  success-only and LAST; `PYTHONUNBUFFERED: "1"` at job level (a timeout-killed
+  step must not lose its buffered tail); `IMAP4_SSL(timeout=60)` + per-phase
+  EMAIL log lines (connect/login/select/search/fetch i/n/storage upload) so
+  the intermittent email hang pinpoints itself. Known gaps: DNS resolution
+  precedes the socket timeout, and the 60s IMAP timeout is per-read.
 - **Scheduling — pg_cron is the clock, GitHub `schedule:` is fallback.**
   GitHub schedule events were MEASURED arriving 74–180 min apart despite */15
   and */5 crons (documented best-effort/droppable; paying doesn't help; a
@@ -217,23 +244,49 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   (full-history secret scan first: research/PUBLIC_REPO_SECRET_SCAN.md — zero
   credentials ever committed), so Actions minutes are free.
 - **News categories & macro** (`news.category` = `'stock'` | `'macro'`):
-  `collect_news.py` writes per-security `'stock'` rows; `collect_macro.py`
-  writes general-economy `'macro'` rows (`sec_id=NULL`) from Globes RSS
-  section feeds (`MACRO_FEEDS`: iID=2 home/economy, iID=585 capital markets —
-  Calcalist/Bizportal block direct RSS, don't fight it). Emails have **no**
+  `collect_news.py` writes per-security `'stock'` rows, **routed by market**
+  (Phase 12): **US → Finnhub** company-news (`FINNHUB_API_KEY`; missing key →
+  one WARNING + Google News fallback), **GLOBAL → GDELT** (next bullet),
+  **TASE → Google News RSS**. `collect_macro.py` writes general-economy
+  `'macro'` rows (`sec_id=NULL`) from `MACRO_FEEDS` — Globes iID=2
+  home/economy + **ynet_economy** RSS (globes_markets iID=585 went silent
+  2026-07-14 and is retired; Calcalist/Bizportal block direct RSS, don't
+  fight it) — plus a **gdelt_macro** world feed behind the GDELT gate.
+  Per-feed summary lines; read=0 logs "FEED SILENT" (a dead feed must
+  scream). Emails have **no**
   category column — the read-time rule is `sec_id NOT NULL` = stock,
   `sec_id NULL` = macro. The dashboard's three filters map to: **My stocks** =
   `category='stock'` ∩ the user's watchlist (+ their stock emails); **Macro &
   reviews** = `category='macro'` (+ unassigned emails); **All** = the union.
+- **GDELT (GLOBAL news + gdelt_macro)** — keyless DOC API, batched **6 names
+  per call** (`("N1" OR "N2" …) sourcelang:english`, timespan=3d,
+  maxrecords=75), attributed by a deterministic relevance guard: ALL name
+  tokens (len≥3) must appear in the title, else `skipped_offtopic`
+  (multi-match → all passing securities). CI runner IPs are
+  **intermittently 429-throttled** (shared IPs, multi-minute per-IP
+  cooldowns — measured; not a permanent block), so: 20s per-call timeout, a
+  **circuit breaker** (3 consecutive 429s → skip remaining GLOBAL batches
+  this run, one warning), and an **hourly gate** — GDELT runs only when UTC
+  minute<15 (= the :02 dispatch run; `GDELT_FORCE=1` overrides).
+  timespan=3d means one successful hourly attempt loses nothing. Don't "fix"
+  a 429 by retrying in-run.
+- **Near-duplicate title suppression** (write-time, both news collectors):
+  the same story arrives from several sources with different URLs, so beyond
+  UNIQUE(url), `norm_tokens`/`is_similar` (ONE definition in collect_news,
+  imported by collect_macro): Jaccard ≥ 0.75 AND ≥ 4 shared tokens vs the
+  last 72h of titles in the same group (per sec_id; macro = the NULL group;
+  ONE query per run, inserted titles join in-memory so intra-run dupes are
+  caught). Skipped-not-deleted; counter `skipped_similar` (first full-scale
+  run caught 1,083).
 - **News staleness gate** (`collect_news.is_stale`, `STALE_DAYS=7`, imported by
   collect_macro — ONE definition): Google News RSS resurfaces archive items
   (**73% of a measured run was stale**); anything PROVABLY older than 7 days at
   ingest is skipped and counted, never inserted. Missing dates are NOT stale
   (act only on proof; stored with published_at NULL as always). Ingest-only —
   existing rows untouched. **Log vocabulary rule, learned twice:** counters are
-  named literally — `read=/inserted=/duplicate=/skipped_stale=`, where
-  `inserted=` is the true rowcount of ON CONFLICT DO NOTHING; never name a
-  read-count `new=`.
+  named literally — `read=/inserted=/duplicate=/skipped_stale=/
+  skipped_similar=/skipped_offtopic=`, where `inserted=` is the true rowcount
+  of ON CONFLICT DO NOTHING; never name a read-count `new=`.
 - **Email attribution** (`collect_email.attribute_email`) — a strict confidence
   ladder: security number as a standalone token > **whole-word** ticker
   (len≥2 — **single-letter symbols are structurally excluded from text
@@ -341,6 +394,14 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   agorot; same-date re-entry updates the close). Both tiers upsert one
   `quotes` row per security via `db.upsert()`. Empty/all-NaN yfinance
   history never overwrites good data (`status` = `no_data`/`stale`).
+  **Unit-jump guard (Phase 11):** raw Yahoo `.TA` series can arrive
+  MIXED-unit — agorot for one segment, ILS for the rest (a single ~×100 step
+  at 2026-05-18 made NXSN y12 17390.7% / ytd 11057.7%; corrected to 74.9% /
+  11.58%). `normalize_unit_jumps()` in collect_prices detects a
+  consecutive-close ratio ≥50 or ≤0.02 and rescales the pre-jump segment;
+  MULTIPLE jumps → returns skipped for that security (quote fields still
+  written) — never guessed. 8 corrupt tail rows (2 NXSN + 6 DANH) were
+  deleted from price_history.
   **Note:** Sano 813014 (`SANO1.TA`) and Bio-Dvash 1082346 (`BHNY.TA`) DO have
   Yahoo listings — the Phase 0 "no free source" conclusion was built on
   guessed tickers and is overturned. They stay on the manual tier with their
@@ -508,7 +569,8 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
 
 Read from environment only, never hardcoded: `DESK_DB_URL`,
 `DESK_DEFAULT_USER`, `GMAIL_USER`, `GMAIL_APP_PASSWORD`, `SEC_USER_AGENT`
-(descriptive UA with a contact — SEC 403s without it), `SUPABASE_URL`, and
+(descriptive UA with a contact — SEC 403s without it), `FINNHUB_API_KEY`
+(US company-news; the collect.yml news step only), `SUPABASE_URL`, and
 `SUPABASE_SERVICE_ROLE_KEY` (**bypasses RLS — GitHub Actions Secrets ONLY,
 never in Vault, never in web/, never logged; errors name the variable, never
 the value**). Documented in `.env.example` / `README.md`. In CI these are
