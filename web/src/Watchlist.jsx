@@ -63,7 +63,7 @@ function applySort(rows, sort) {
   });
 }
 
-export default function Watchlist({ rows = [], status = 'loading', error = '', onAdd, onRemove, onOpen, mobile = false }) {
+export default function Watchlist({ rows = [], status = 'loading', error = '', onAdd, onRemove, onOpen, onReorder, orderError = '', mobile = false }) {
   const existingIds = rows.map((r) => r.sec_id);
   // True while the table is horizontally scrolled — gates the sticky cells'
   // edge shadow so the UNscrolled (incl. full-width) view stays pixel-equal to
@@ -83,16 +83,35 @@ export default function Watchlist({ rows = [], status = 'loading', error = '', o
       s?.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: num ? 'desc' : 'asc' }
     );
   }
+  // Reorder mode (Phase 13B): arrows move rows in the FULL manual order, so
+  // entering it clears sort+filter (moving inside a filtered/sorted view would
+  // be ambiguous). sort=null ⇒ rows arrive already in manual position order.
+  const [editMode, setEditMode] = useState(false);
+  function toggleEdit() {
+    setEditMode((m) => !m);
+    setSort(null);
+    setQuery('');
+  }
+  function move(secId, delta) {
+    const ids = rows.map((r) => r.sec_id);
+    const i = ids.indexOf(secId);
+    const j = i + delta;
+    if (i < 0 || j < 0 || j >= ids.length) return;
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    onReorder?.(ids);
+  }
   const q = query.trim().toLowerCase();
-  const view = applySort(
-    q
-      ? rows.filter(
-          (r) =>
-            (r.name || '').toLowerCase().includes(q) || (r.symbol || '').toLowerCase().includes(q)
-        )
-      : rows,
-    sort
-  );
+  const view = editMode
+    ? rows
+    : applySort(
+        q
+          ? rows.filter(
+              (r) =>
+                (r.name || '').toLowerCase().includes(q) || (r.symbol || '').toLowerCase().includes(q)
+            )
+          : rows,
+        sort
+      );
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
       <div style={{ padding: '18px 24px 12px', display: 'flex', alignItems: 'baseline', gap: 10 }}>
@@ -115,7 +134,16 @@ export default function Watchlist({ rows = [], status = 'loading', error = '', o
 
       {status === 'ready' && rows.length > 0 && (
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: mobile ? '0 16px 8px' : '0 24px 8px' }}>
+          <button onClick={toggleEdit} style={ctlBtn(editMode)}>
+            {editMode ? 'סיום סידור' : 'סידור'}
+          </button>
+          {!editMode && sort && (
+            <button onClick={() => setSort(null)} style={ctlBtn(false)}>
+              הסדר שלי
+            </button>
+          )}
           {/* In-list filter — clears via ✕ (inline-end in RTL = left) or Escape */}
+          {!editMode && (
           <div style={{ position: 'relative', flex: 1, maxWidth: 320 }}>
             <input
               value={query}
@@ -143,8 +171,9 @@ export default function Watchlist({ rows = [], status = 'loading', error = '', o
               </button>
             )}
           </div>
+          )}
           {/* Mobile has no headers to click — sorting via a compact select */}
-          {mobile && (
+          {mobile && !editMode && (
             <select
               value={sort ? sort.key : ''}
               onChange={(e) => {
@@ -156,13 +185,16 @@ export default function Watchlist({ rows = [], status = 'loading', error = '', o
                 color: t.txt, fontSize: 13, fontFamily: 'Heebo, sans-serif', padding: '7px 8px',
               }}
             >
-              <option value="">סדר מקורי</option>
+              <option value="">הסדר שלי</option>
               {SORT_COLS.map((c) => (
                 <option key={c.key} value={c.key}>{c.label}</option>
               ))}
             </select>
           )}
         </div>
+      )}
+      {orderError && (
+        <div style={{ padding: mobile ? '0 16px 6px' : '0 24px 6px', fontSize: 12, color: t.red }}>{orderError}</div>
       )}
       {status === 'ready' && rows.length > 0 && view.length === 0 && <Notice title="אין תוצאות לסינון" />}
 
@@ -184,7 +216,7 @@ export default function Watchlist({ rows = [], status = 'loading', error = '', o
           }}
         >
           {view.map((sec) => (
-            <SecurityCard key={sec.sec_id} sec={sec} onRemove={onRemove} onOpen={onOpen} />
+            <SecurityCard key={sec.sec_id} sec={sec} onRemove={onRemove} onOpen={onOpen} editMode={editMode} onMove={move} />
           ))}
         </div>
       )}
@@ -204,7 +236,7 @@ export default function Watchlist({ rows = [], status = 'loading', error = '', o
           <div style={{ minWidth: 'min-content', display: 'flex', flexDirection: 'column' }}>
             <HeaderRow xScrolled={xScrolled} sort={sort} onSort={toggleSort} />
             {view.map((sec) => (
-              <Row key={sec.sec_id} sec={sec} onRemove={onRemove} onOpen={onOpen} xScrolled={xScrolled} />
+              <Row key={sec.sec_id} sec={sec} onRemove={onRemove} onOpen={onOpen} xScrolled={xScrolled} editMode={editMode} onMove={move} />
             ))}
           </div>
         </div>
@@ -288,7 +320,7 @@ function HeaderRow({ xScrolled, sort, onSort }) {
   );
 }
 
-function Row({ sec, onRemove, onOpen, xScrolled }) {
+function Row({ sec, onRemove, onOpen, xScrolled, editMode, onMove }) {
   const [hover, setHover] = useState(false);
   const q = sec.quote;
   const manual = sec.price_source === 'manual';
@@ -438,14 +470,45 @@ function Row({ sec, onRemove, onOpen, xScrolled }) {
           boxShadow: xScrolled ? SHADOW_REMOVE_EDGE : 'none',
         }}
       >
-        <RemoveButton
-          onClick={(e) => {
-            // The row opens the detail page; the × must not do both.
-            e.stopPropagation();
-            onRemove?.(sec.sec_id);
-          }}
-        />
+        {editMode ? (
+          <MoveArrows onUp={() => onMove(sec.sec_id, -1)} onDown={() => onMove(sec.sec_id, 1)} />
+        ) : (
+          <RemoveButton
+            onClick={(e) => {
+              // The row opens the detail page; the × must not do both.
+              e.stopPropagation();
+              onRemove?.(sec.sec_id);
+            }}
+          />
+        )}
       </div>
+    </div>
+  );
+}
+
+// Control-button style ("סידור" / "הסדר שלי"). Gold accent marks the ACTIVE
+// reorder mode (per theme rules: accent for active controls, never grn/red).
+function ctlBtn(active) {
+  return {
+    background: active ? t.accSoft : t.surf,
+    border: `1px solid ${active ? t.accDim : t.bd}`,
+    color: active ? t.acc : t.txt,
+    borderRadius: 8, fontSize: 13, fontFamily: 'Heebo, sans-serif',
+    padding: '7px 12px', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
+  };
+}
+
+// Native <button>s: focusable, Enter/Space activate for free. stopPropagation
+// on the wrapper so a move never also opens the detail page.
+export function MoveArrows({ onUp, onDown }) {
+  const b = {
+    background: 'none', border: `1px solid ${t.bd}`, borderRadius: 5, color: t.txt,
+    fontSize: 10, cursor: 'pointer', padding: '2px 5px', fontFamily: 'Heebo, sans-serif',
+  };
+  return (
+    <div style={{ display: 'flex', gap: 3, flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
+      <button title="הזזה למעלה" onClick={onUp} style={b}>▲</button>
+      <button title="הזזה למטה" onClick={onDown} style={b}>▼</button>
     </div>
   );
 }

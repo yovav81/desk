@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { supabase } from './supabaseClient';
 
 // Per-user watchlist. `watchlist.user_id` references OUR `users` table (integer
@@ -49,6 +49,11 @@ export function useWatchlist(authUser, refreshTick) {
   const [status, setStatus] = useState('loading'); // loading | ready | error
   const [error, setError] = useState('');
   const [ownerId, setOwnerId] = useState(null);
+  const [orderError, setOrderError] = useState('');
+  const serverPos = useRef(new Map()); // last KNOWN-persisted position per sec_id
+  const persistTimer = useRef(null);
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
 
   useEffect(() => {
     let cancelled = false;
@@ -66,10 +71,10 @@ export function useWatchlist(authUser, refreshTick) {
       setOwnerId(userId);
       if (import.meta.env.DEV) console.debug('[watchlist] user id =', userId, 'auth uid =', authUser.id);
 
-      // 2) that user's watchlist sec_ids
+      // 2) that user's watchlist sec_ids + manual order (Phase 13B / sql/006)
       const { data: wl, error: e2 } = await supabase
         .from('watchlist')
-        .select('sec_id')
+        .select('sec_id, position')
         .eq('user_id', userId);
       if (cancelled) return;
       if (e2) return fail(e2);
@@ -103,11 +108,14 @@ export function useWatchlist(authUser, refreshTick) {
         console.debug('[watchlist] securities rows =', secRes.data?.length, 'quotes rows =', quoteRes.data?.length);
       }
 
-      // 4) merge on sec_id
+      // 4) merge on sec_id; manual position is THE default order (NULLs =
+      // not-yet-positioned securities append at the end, name-ordered).
       const quoteBySec = new Map((quoteRes.data || []).map((q) => [q.sec_id, q]));
+      const posBySec = new Map((wl || []).map((w) => [w.sec_id, w.position]));
       const merged = (secRes.data || [])
-        .map((s) => ({ ...s, quote: quoteBySec.get(s.sec_id) ?? null }))
-        .sort((a, b) => displayKey(a).localeCompare(displayKey(b)));
+        .map((s) => ({ ...s, position: posBySec.get(s.sec_id) ?? null, quote: quoteBySec.get(s.sec_id) ?? null }))
+        .sort(byPosition);
+      serverPos.current = new Map(merged.map((r) => [r.sec_id, r.position]));
 
       setRows(merged);
       setStatus('ready');
@@ -150,8 +158,10 @@ export function useWatchlist(authUser, refreshTick) {
       price_source: cand.price_source,
       quote: null,
     };
+    // New securities append to the end of the manual order.
+    optimistic.position = rows.reduce((m, r) => Math.max(m, r.position ?? 0), 0) + 1;
     const prev = rows;
-    setRows((rs) => [...rs, optimistic].sort((a, b) => displayKey(a).localeCompare(displayKey(b))));
+    setRows((rs) => [...rs, optimistic]);
 
     // ignoreDuplicates => INSERT ... ON CONFLICT DO NOTHING, so an existing
     // security is left exactly as it is. Never clobber a good row (e.g. one the
@@ -176,7 +186,10 @@ export function useWatchlist(authUser, refreshTick) {
 
     const { error: e2 } = await supabase
       .from('watchlist')
-      .upsert({ user_id: ownerId, sec_id: cand.sec_id }, { onConflict: 'user_id,sec_id', ignoreDuplicates: true });
+      .upsert(
+        { user_id: ownerId, sec_id: cand.sec_id, position: optimistic.position },
+        { onConflict: 'user_id,sec_id', ignoreDuplicates: true }
+      );
     if (e2) {
       setRows(prev);
       return { ok: false, reason: 'watchlist-insert', message: e2.message };
@@ -205,9 +218,49 @@ export function useWatchlist(authUser, refreshTick) {
     return { ok: true };
   }
 
-  return { rows, status, error, add, remove };
+  // --- reorder (Phase 13B) -------------------------------------------------
+  // Optimistic local move; ONE batched upsert of CHANGED positions, debounced
+  // ~1.5s after the last move. On error: toast (orderError) + revert to the
+  // last known server state. NOTE: needs the watchlist UPDATE policy (see
+  // sql/006) — without it the upsert fails and this revert path runs.
+  function reorder(orderedIds) {
+    setRows((rs) => {
+      const byId = new Map(rs.map((r) => [r.sec_id, r]));
+      return orderedIds.map((id, i) => ({ ...byId.get(id), position: i + 1 }));
+    });
+    clearTimeout(persistTimer.current);
+    persistTimer.current = setTimeout(async () => {
+      const payload = rowsRef.current
+        .filter((r) => serverPos.current.get(r.sec_id) !== r.position)
+        .map((r) => ({ user_id: ownerId, sec_id: r.sec_id, position: r.position }));
+      if (!payload.length) return;
+      const { error: e } = await supabase
+        .from('watchlist')
+        .upsert(payload, { onConflict: 'user_id,sec_id' });
+      if (e) {
+        setOrderError('שגיאה בשמירת הסדר — הוחזר הסדר הקודם');
+        setTimeout(() => setOrderError(''), 4000);
+        setRows((rs) =>
+          rs.map((r) => ({ ...r, position: serverPos.current.get(r.sec_id) ?? null })).sort(byPosition)
+        );
+      } else {
+        for (const p of payload) serverPos.current.set(p.sec_id, p.position);
+      }
+    }, 1500);
+  }
+
+  return { rows, status, error, add, remove, reorder, orderError };
 }
 
 function displayKey(s) {
   return (s.market === 'US' ? s.symbol : s.name) || s.sec_id || '';
+}
+
+// Manual position ascending; position-less rows (pre-migration, or added by
+// another session) sink to the end in name order.
+function byPosition(a, b) {
+  if (a.position == null || b.position == null) {
+    return (a.position == null) - (b.position == null) || displayKey(a).localeCompare(displayKey(b));
+  }
+  return a.position - b.position;
 }

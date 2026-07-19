@@ -594,6 +594,8 @@ function Dashboard({ session, isAdmin = false }) {
             error={wl.error}
             onAdd={wl.add}
             onRemove={wl.remove}
+            onReorder={wl.reorder}
+            orderError={wl.orderError}
             onOpen={setOpenSecId}
           />
         </div>
@@ -665,6 +667,8 @@ function Dashboard({ session, isAdmin = false }) {
             error={wl.error}
             onAdd={wl.add}
             onRemove={wl.remove}
+            onReorder={wl.reorder}
+            orderError={wl.orderError}
             onOpen={setOpenSecId}
           />
         </div>

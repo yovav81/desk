@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { theme as t } from './theme';
 import { RET_KEYS, ccySymbol, displayName, fmtPct, fmtPrice, retColor, subLine } from './format';
+// Circular-safe: MoveArrows is a hoisted function export, only touched at render.
+import { MoveArrows } from './Watchlist';
 
 // Mobile watchlist card — follows the design_reference mockup's card intent
 // (name+sub+badge / price+day / 4-col returns grid under a top border).
@@ -13,7 +15,7 @@ import { RET_KEYS, ccySymbol, displayName, fmtPct, fmtPrice, retColor, subLine }
 
 const mono = "'IBM Plex Mono', monospace";
 
-export default function SecurityCard({ sec, onRemove, onOpen }) {
+export default function SecurityCard({ sec, onRemove, onOpen, editMode, onMove }) {
   const [pressed, setPressed] = useState(false);
   const q = sec.quote;
   const manual = sec.price_source === 'manual';
@@ -103,8 +105,9 @@ export default function SecurityCard({ sec, onRemove, onOpen }) {
             )
           )}
         </div>
-        {/* ✕ — 40px tap target (negative margin keeps the card compact),
-            stopPropagation so removing never also opens the detail page */}
+        {editMode ? (
+          <MoveArrows onUp={() => onMove(sec.sec_id, -1)} onDown={() => onMove(sec.sec_id, 1)} />
+        ) : (
         <button
           onClick={(e) => {
             e.stopPropagation();
@@ -126,6 +129,7 @@ export default function SecurityCard({ sec, onRemove, onOpen }) {
         >
           ×
         </button>
+        )}
       </div>
 
       {/* price + day change */}
