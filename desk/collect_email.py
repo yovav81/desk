@@ -154,6 +154,7 @@ def _upload_to_storage(cfg: tuple[str, str], path: str, payload: bytes, content_
     WITHOUT the key), the caller skips the metadata row so a later run/backfill
     can retry."""
     url = f"{cfg[0]}/storage/v1/object/{BUCKET}/{quote(path)}"
+    log.info("EMAIL storage upload %s", path)
     try:
         r = requests.post(
             url,
@@ -461,20 +462,24 @@ def collect() -> None:
     log.info("EMAIL connecting imap.gmail.com")
     imap = imaplib.IMAP4_SSL(IMAP_HOST, timeout=60)
     try:
+        log.info("EMAIL login")
         imap.login(gmail_user, gmail_pass)
+        log.info("EMAIL select")
         imap.select("INBOX")
+        log.info("EMAIL search")
         status, data = imap.search(None, "UNSEEN")
         if status != "OK":
             log.warning("IMAP search failed: %s", status)
             return
         ids = data[0].split()
-        log.info("unseen messages: %d", len(ids))
+        log.info("EMAIL search n=%d", len(ids))
 
         fetched = new_count = dup_count = tagged = 0
         attachments_saved = skipped_oversize = 0
         by_tier = {"secnum": 0, "symbol": 0, "name": 0}
-        for msg_id in ids:
+        for i, msg_id in enumerate(ids, 1):
             try:
+                log.info("EMAIL fetch %d/%d", i, len(ids))
                 status, msg_data = imap.fetch(msg_id, "(BODY.PEEK[])")
                 if status != "OK" or not msg_data or msg_data[0] is None:
                     log.warning("fetch failed for id %s", msg_id)
