@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from './supabaseClient';
 import { theme as t } from './theme';
 import Watchlist from './Watchlist';
@@ -31,7 +31,135 @@ export default function App() {
   }, []);
 
   if (loading) return <Splash />;
-  return session ? <Dashboard session={session} /> : <Login />;
+  if (!session) return <Login />;
+  // THREE-WAY GATE: no session → Login; session but unapproved → Pending;
+  // approved → Dashboard. The gate is a wrapper so Dashboard (and its
+  // useWatchlist/useNews) never mounts until approval is confirmed.
+  return <ApprovalGate session={session} />;
+}
+
+// Fetches the caller's OWN profiles row (RLS allows own-row select — sql/005)
+// to decide pending vs dashboard. NOTE: this screen is UX only — the real
+// enforcement is the sql/005 RLS, which already returns an unapproved user
+// ZERO rows everywhere. A user cannot self-approve by defeating this component.
+function ApprovalGate({ session }) {
+  const [state, setState] = useState('loading'); // loading | approved | pending | error
+  const uid = session.user.id;
+
+  const check = useCallback(async () => {
+    setState('loading');
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('approved')
+      .eq('id', uid)
+      .maybeSingle();
+    if (error) {
+      setState('error');
+      return;
+    }
+    // No row yet (e.g. the signup trigger hasn't landed) = not approved.
+    setState(data?.approved ? 'approved' : 'pending');
+  }, [uid]);
+
+  useEffect(() => {
+    check();
+  }, [check]);
+
+  if (state === 'loading') return <Splash />;
+  if (state === 'approved') return <Dashboard session={session} />;
+  // pending OR error → the pending screen (error just adds a line + retry).
+  return <Pending email={session.user.email} isError={state === 'error'} onRecheck={check} />;
+}
+
+function Pending({ email, isError, onRecheck }) {
+  const [busy, setBusy] = useState(false);
+  async function recheck() {
+    setBusy(true);
+    // The just-approved advance path: an admin flips approved=true (SQL/admin
+    // page); this re-fetches the profile and, if approved, ApprovalGate swaps
+    // to the dashboard. No realtime, no re-login needed — approved is read
+    // live by RLS, never cached in the JWT.
+    await onRecheck();
+    setBusy(false);
+  }
+  return (
+    <div
+      style={{
+        minHeight: '100vh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: `radial-gradient(1200px 600px at 50% -10%, ${t.accSoft}, transparent 60%), ${t.bg}`,
+        padding: 24,
+      }}
+    >
+      <div
+        style={{
+          width: '100%',
+          maxWidth: 400,
+          background: t.surf,
+          border: `1px solid ${t.bd}`,
+          borderRadius: 18,
+          padding: '36px 32px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 16,
+          textAlign: 'center',
+          animation: 'fadeUp .4s ease',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'center' }}>
+          <Brand />
+        </div>
+        <div style={{ fontSize: 18, fontWeight: 700, color: t.txt }}>החשבון שלך ממתין לאישור</div>
+        <div style={{ fontSize: 14, color: t.mut, lineHeight: 1.6 }}>
+          נרשמת בהצלחה. מנהל המערכת יבדוק ויאשר את הגישה שלך בקרוב. אין צורך להירשם שוב — לחצו
+          "בדוק שוב" לאחר האישור.
+        </div>
+        {email && (
+          <div dir="ltr" style={{ fontSize: 12, color: t.mut, fontFamily: "'IBM Plex Mono', monospace" }}>
+            {email}
+          </div>
+        )}
+        {isError && (
+          <div style={{ fontSize: 13, color: t.red }}>שגיאה בבדיקת ההרשאה — נסו שוב.</div>
+        )}
+        <button
+          onClick={recheck}
+          disabled={busy}
+          style={{
+            background: t.acc,
+            color: '#08101F',
+            border: 'none',
+            borderRadius: 10,
+            padding: 13,
+            fontSize: 15,
+            fontWeight: 600,
+            fontFamily: 'Heebo, sans-serif',
+            cursor: busy ? 'default' : 'pointer',
+            opacity: busy ? 0.7 : 1,
+          }}
+        >
+          {busy ? 'בודק…' : 'בדוק שוב'}
+        </button>
+        <button
+          onClick={() => supabase.auth.signOut()}
+          style={{
+            background: 'none',
+            border: `1px solid ${t.bd}`,
+            borderRadius: 10,
+            padding: 11,
+            fontSize: 14,
+            color: t.mut,
+            fontFamily: 'Heebo, sans-serif',
+            cursor: 'pointer',
+          }}
+        >
+          יציאה
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function Splash() {
@@ -54,28 +182,73 @@ function Brand({ size = 22, dotSize = 12 }) {
   );
 }
 
+// Supabase's built-in errors are English; map the ones a user can hit to
+// Hebrew rather than leaking raw text.
+function hebrewAuthError(error, mode) {
+  const m = (error?.message || '').toLowerCase();
+  if (m.includes('already registered') || m.includes('already been registered'))
+    return 'האימייל כבר רשום — נסו להתחבר';
+  if (m.includes('password')) return 'הסיסמה חייבת להכיל לפחות 6 תווים';
+  if (m.includes('email') && (m.includes('invalid') || m.includes('valid')))
+    return 'כתובת אימייל לא תקינה';
+  if (m.includes('invalid login credentials')) return 'התחברות נכשלה — בדקו אימייל וסיסמה';
+  if (m.includes('email not confirmed')) return 'האימייל טרם אומת — בדקו את תיבת הדואר ואשרו';
+  return mode === 'signup' ? 'ההרשמה נכשלה — נסו שוב' : 'ההתחברות נכשלה — נסו שוב';
+}
+
+const MIN_PASSWORD = 6; // Supabase default minimum
+
 function Login() {
-  const [username, setUsername] = useState('');
+  const [mode, setMode] = useState('login'); // login | signup
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [err, setErr] = useState('');
+  const [notice, setNotice] = useState(''); // success message (signup confirmation)
   const [busy, setBusy] = useState(false);
+  const isSignup = mode === 'signup';
+
+  function switchMode(next) {
+    setMode(next);
+    setErr('');
+    setNotice('');
+  }
 
   async function onSubmit(e) {
     e.preventDefault();
     setErr('');
-    if (!username.trim() || !password.trim()) {
-      setErr('יש להזין שם משתמש וסיסמה');
+    setNotice('');
+    const mail = email.trim();
+    if (!mail || !password) {
+      setErr('יש להזין אימייל וסיסמה');
+      return;
+    }
+    if (isSignup && password.length < MIN_PASSWORD) {
+      setErr(`הסיסמה חייבת להכיל לפחות ${MIN_PASSWORD} תווים`);
       return;
     }
     setBusy(true);
-    // Supabase Auth is email-based: the "שם משתמש" value is the user's email.
-    const { error } = await supabase.auth.signInWithPassword({
-      email: username.trim(),
-      password,
-    });
+
+    if (isSignup) {
+      const { error } = await supabase.auth.signUp({ email: mail, password });
+      setBusy(false);
+      if (error) {
+        setErr(hebrewAuthError(error, 'signup'));
+        return;
+      }
+      // Email confirmation is ON, so there is NO active session yet — Supabase
+      // sent a confirmation link. (Supabase deliberately returns an obfuscated
+      // success for an ALREADY-registered email — identities: [] — to prevent
+      // enumeration; we show the same confirmation message either way, which is
+      // the privacy-preserving behaviour.) Switch to login for after they confirm.
+      setMode('login');
+      setNotice('נשלח מייל אימות לכתובת שלך. אשר אותו ואז התחבר.');
+      return;
+    }
+
+    const { error } = await supabase.auth.signInWithPassword({ email: mail, password });
     setBusy(false);
-    if (error) setErr('התחברות נכשלה — בדקו שם משתמש וסיסמה');
-    // On success, onAuthStateChange swaps to the placeholder.
+    if (error) setErr(hebrewAuthError(error, 'login'));
+    // On success, onAuthStateChange sets the session → ApprovalGate decides.
   }
 
   return (
@@ -106,27 +279,38 @@ function Login() {
       >
         <Brand />
 
+        <div style={{ fontSize: 15, fontWeight: 600, color: t.txt }}>
+          {isSignup ? 'הרשמה' : 'התחברות'}
+        </div>
+
         <Field
-          label="שם משתמש"
-          value={username}
+          label="אימייל"
+          type="email"
+          value={email}
           onChange={(e) => {
-            setUsername(e.target.value);
+            setEmail(e.target.value);
             setErr('');
           }}
-          autoComplete="username"
+          autoComplete="email"
         />
-        <Field
-          label="סיסמה"
-          type="password"
-          value={password}
-          onChange={(e) => {
-            setPassword(e.target.value);
-            setErr('');
-          }}
-          autoComplete="current-password"
-        />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <Field
+            label="סיסמה"
+            type="password"
+            value={password}
+            onChange={(e) => {
+              setPassword(e.target.value);
+              setErr('');
+            }}
+            autoComplete={isSignup ? 'new-password' : 'current-password'}
+          />
+          {isSignup && (
+            <div style={{ fontSize: 11.5, color: t.mut }}>לפחות {MIN_PASSWORD} תווים</div>
+          )}
+        </div>
 
         {err && <div style={{ fontSize: 13, color: t.red }}>{err}</div>}
+        {notice && <div style={{ fontSize: 13, color: t.acc, lineHeight: 1.5 }}>{notice}</div>}
 
         <button
           type="submit"
@@ -144,8 +328,18 @@ function Login() {
             opacity: busy ? 0.7 : 1,
           }}
         >
-          {busy ? 'מתחבר…' : 'כניסה'}
+          {busy ? (isSignup ? 'נרשם…' : 'מתחבר…') : isSignup ? 'הרשמה' : 'כניסה'}
         </button>
+
+        <div style={{ fontSize: 13, color: t.mut, textAlign: 'center' }}>
+          {isSignup ? 'יש לך כבר חשבון? ' : 'אין לך חשבון? '}
+          <span
+            onClick={() => switchMode(isSignup ? 'login' : 'signup')}
+            style={{ color: t.acc, cursor: 'pointer', fontWeight: 600 }}
+          >
+            {isSignup ? 'התחברות' : 'הרשמה'}
+          </span>
+        </div>
       </form>
     </div>
   );
