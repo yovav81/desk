@@ -134,6 +134,38 @@ def closes_series(df: pd.DataFrame | None, symbol: str) -> tuple[list[date], lis
     return dates, [float(v) for v in series.to_list()]
 
 
+# Yahoo occasionally switches a TASE small cap's quote unit mid-series (shekels
+# <-> agorot on one date, e.g. NXSN 2026-05-18: adjacent ratio 102.6). A uniform
+# ÷100 keeps the current price right but leaves pre-jump anchors ~100x off, so
+# period_returns (a ratio across the jump) explodes. Rescale the earlier segment
+# to the later unit BEFORE returns/history consume the array. Real splits
+# (2:1..20:1) stay outside the [0.02, 50] band and are untouched.
+UNIT_JUMP_HI = 50.0
+UNIT_JUMP_LO = 0.02
+
+
+def normalize_unit_jumps(dates: list[date], closes: list[float]):
+    """(closes2, info): no jump -> (closes, None); one jump -> earlier segment
+    rescaled to the later unit + info{date,ratio,factor}; >1 jump ->
+    (closes unchanged, {"multi": n}) so the caller can skip returns."""
+    jumps = []  # (index i where closes[i]/closes[i-1] leaves the band, ratio)
+    for i in range(1, len(closes)):
+        a, b = closes[i - 1], closes[i]
+        if not a or not b:  # skip None / 0
+            continue
+        r = b / a
+        if r >= UNIT_JUMP_HI or r <= UNIT_JUMP_LO:
+            jumps.append((i, r))
+    if not jumps:
+        return closes, None
+    if len(jumps) > 1:
+        return closes, {"multi": len(jumps)}
+    i, r = jumps[0]
+    factor = 100.0 if r >= UNIT_JUMP_HI else 0.01  # up-jump: earlier*100; down-jump: earlier/100
+    fixed = [(c * factor if (idx < i and c is not None) else c) for idx, c in enumerate(closes)]
+    return fixed, {"date": dates[i], "ratio": r, "factor": factor}
+
+
 # Sub-unit currencies Yahoo quotes in 1/100 of the major unit: agorot (ILA) on
 # TASE, pence (GBp/GBX) on the LSE. This is the ONE place the ÷100 happens — a
 # native sub-unit price is divided by 100 and stored in the major currency, so
@@ -252,6 +284,15 @@ def collect_auto(engine, secs: list[dict], existing: dict[str, dict], today: dat
             log.warning("%s (%s): no usable history -> %s", sec_id, symbol, values["status"])
         else:
             dates, closes = data
+            # Fix a single agorot<->shekel unit discontinuity so returns AND
+            # persisted history consume the same single-scale array (one truth).
+            closes, jump_info = normalize_unit_jumps(dates, closes)
+            if jump_info and "multi" not in jump_info:
+                log.info(
+                    "UNIT_JUMP sec_id=%s date=%s ratio=%.3f action=pre_x%s",
+                    sec_id, jump_info["date"], jump_info["ratio"],
+                    "100" if jump_info["factor"] == 100.0 else "0.01",
+                )
             native_ccy = currency_for(symbol, prior["currency"] if prior else None)
             display_ccy, scale = normalize_currency(native_ccy)  # agorot/pence -> major unit ÷100
             last, last_date = closes[-1], dates[-1]
@@ -267,12 +308,18 @@ def collect_auto(engine, secs: list[dict], existing: dict[str, dict], today: dat
                 "status": "ok",
             }
             if need_anchors and (prior is None or prior["anchors_date"] != today):
-                returns = period_returns(dates, closes, last, today)
+                if jump_info and jump_info.get("multi"):
+                    # Ambiguous unit history — don't guess a scale; NULL the
+                    # period returns this run (current quote fields still write).
+                    returns = {c: None for c in PERIOD_COLS}
+                    log.info("UNIT_JUMP sec_id=%s jumps=%s action=returns_skipped", sec_id, jump_info["multi"])
+                else:
+                    returns = period_returns(dates, closes, last, today)
+                    missing = [c for c, v in returns.items() if v is None]
+                    if missing:
+                        log.info("%s (%s): history since %s -> %s = NULL", sec_id, symbol, dates[0], ",".join(missing))
                 values.update(returns)
                 values["anchors_date"] = today
-                missing = [c for c, v in returns.items() if v is None]
-                if missing:
-                    log.info("%s (%s): history since %s -> %s = NULL", sec_id, symbol, dates[0], ",".join(missing))
             # Only on the daily anchor refresh: that's the run holding the full
             # ~400d frame. The short (12d) intra-day runs would just rewrite the
             # same recent closes for no gain.
