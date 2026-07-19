@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -139,6 +140,33 @@ def fetch_finnhub(symbol: str, key: str, now: datetime) -> list[dict]:
     return items
 
 
+def fetch_gdelt(query: str, timespan: str, maxrecords: int) -> list[dict]:
+    """GDELT 2.1 DOC API (keyless). seendate is YYYYMMDDTHHMMSSZ, real UTC.
+    MEASURED 2026-07-19: GDELT rate-limits per IP with a cooldown — burst
+    calls got 429 regardless of UA; the same query returned 200 after ~90s
+    quiet. Callers space calls (sleep) and treat 429 as skip, never retry."""
+    url = (
+        "https://api.gdeltproject.org/api/v2/doc/doc"
+        f"?query={quote(query)}&mode=artlist&format=json"
+        f"&maxrecords={maxrecords}&timespan={timespan}"
+    )
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        data = json.loads(r.read())
+    items = []
+    for a in data.get("articles", []):
+        title, link, seen = a.get("title"), a.get("url"), a.get("seendate")
+        published_at = None
+        if seen:
+            try:
+                published_at = datetime.strptime(seen, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+            except ValueError:
+                pass
+        if title and link:
+            items.append({"title": title, "url": link, "published_at": published_at})
+    return items
+
+
 def collect() -> None:
     engine = get_engine()
     init_db(engine)
@@ -151,12 +179,17 @@ def collect() -> None:
         log.warning("NEWS finnhub key missing — falling back to Google News for US")
 
     groups = recent_title_groups(engine, now)
-    total_read = total_inserted = total_dup = total_stale = total_similar = 0
+    total_read = total_inserted = total_dup = total_stale = total_similar = total_offtopic = 0
     for sec in secs:
         use_finnhub = sec["market"] == "US" and bool(finnhub_key)
+        use_gdelt = sec["market"] == "GLOBAL"
+        src = "finnhub" if use_finnhub else ("gdelt" if use_gdelt else "google_news")
         try:
             if use_finnhub:
                 items = fetch_finnhub(sec["symbol"], finnhub_key, now)
+            elif use_gdelt:
+                items = fetch_gdelt(f'"{sec["name"]}" sourcelang:english', "3d", 50)
+                time.sleep(1)  # politeness — GDELT calls only
             else:
                 items = fetch_feed(rss_url_for(sec))
         except urllib.error.HTTPError as e:
@@ -172,20 +205,27 @@ def collect() -> None:
         # inserted= is the LITERAL insert count — ON CONFLICT DO NOTHING reports
         # rowcount 0 on a duplicate — and duplicate=/skipped_stale= name the
         # other two outcomes explicitly.
+        # Relevance guard (GDELT only): free-text search over the world's press
+        # returns plenty of off-topic hits for generic company names, so ALL
+        # name tokens (len>=3) must appear in the title. Deterministic, no scoring.
+        name_needles = {t for t in norm_tokens(sec["name"] or "") if len(t) >= 3}
         group = groups.setdefault(sec["sec_id"], [])
-        inserted = stale = similar = 0
+        inserted = stale = similar = offtopic = 0
         with engine.begin() as conn:
             for it in items:
                 if is_stale(it["published_at"], now):
                     stale += 1
                     continue
                 toks = norm_tokens(it["title"])
+                if use_gdelt and not name_needles <= toks:
+                    offtopic += 1
+                    continue
                 if any(is_similar(toks, t) for t in group):
                     similar += 1
                     continue
                 stmt = insert_ignore(engine, news, ["url"]).values(
                     sec_id=sec["sec_id"],
-                    source="finnhub" if use_finnhub else "google_news",
+                    source=src,
                     title=it["title"],
                     url=it["url"],
                     published_at=it["published_at"],
@@ -196,20 +236,21 @@ def collect() -> None:
                     inserted += 1
                     group.append(toks)
 
-        dup = len(items) - inserted - stale - similar
+        dup = len(items) - inserted - stale - similar - offtopic
         total_read += len(items)
         total_inserted += inserted
         total_dup += dup
         total_stale += stale
         total_similar += similar
+        total_offtopic += offtopic
         log.info(
-            "%s (%s): read=%d inserted=%d duplicate=%d skipped_stale=%d skipped_similar=%d",
-            sec["sec_id"], sec["name"], len(items), inserted, dup, stale, similar,
+            "%s (%s): read=%d inserted=%d duplicate=%d skipped_stale=%d skipped_similar=%d skipped_offtopic=%d",
+            sec["sec_id"], sec["name"], len(items), inserted, dup, stale, similar, offtopic,
         )
 
     log.info(
-        "done: read=%d inserted=%d duplicate=%d skipped_stale=%d skipped_similar=%d",
-        total_read, total_inserted, total_dup, total_stale, total_similar,
+        "done: read=%d inserted=%d duplicate=%d skipped_stale=%d skipped_similar=%d skipped_offtopic=%d",
+        total_read, total_inserted, total_dup, total_stale, total_similar, total_offtopic,
     )
 
 

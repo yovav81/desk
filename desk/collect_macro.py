@@ -23,7 +23,7 @@ from sqlalchemy import select
 # definition (Google News archive noise). Globes is a curated latest-N feed and
 # probably never trips it, but that is an assumption; the skipped_stale counter
 # measures it instead of trusting it.
-from desk.collect_news import SIMILAR_HOURS, is_similar, is_stale, norm_tokens
+from desk.collect_news import SIMILAR_HOURS, fetch_gdelt, is_similar, is_stale, norm_tokens
 from desk.db import get_engine, init_db, insert_ignore, news
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -40,6 +40,10 @@ MACRO_FEEDS = [
     ("globes_home", GLOBES_RSS.format(iid=2)),
     ("ynet_economy", "https://www.ynet.co.il/Integration/StoryRss6.xml"),
 ]
+# World-macro lane (Phase 12C): GDELT keyless DOC API, English press, 1 day.
+# Rides the same loop as the RSS feeds (same gates/log); url=None routes the
+# fetch to fetch_gdelt. Its failure warns + continues like any dead feed.
+GDELT_MACRO_QUERY = '("interest rate" OR "central bank" OR inflation OR "stock market") sourcelang:english'
 
 
 def fetch_feed(url: str) -> list[dict]:
@@ -81,9 +85,9 @@ def collect() -> None:
             )
         ]
     total_read = total_inserted = total_dup = total_stale = total_similar = 0
-    for source, url in MACRO_FEEDS:
+    for source, url in MACRO_FEEDS + [("gdelt_macro", None)]:
         try:
-            items = fetch_feed(url)
+            items = fetch_gdelt(GDELT_MACRO_QUERY, "1d", 30) if url is None else fetch_feed(url)
         except Exception as e:
             log.warning("macro feed failed for %s (%s): %s", source, url, e)
             continue
