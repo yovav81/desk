@@ -11,6 +11,8 @@ import {
   retColor,
   subLine,
 } from './format';
+// displayName doubles as the sort key for the name column (ticker for
+// US/GLOBAL, Hebrew name for TASE — sorts what the user actually sees).
 
 // Desktop watchlist table (right/primary panel in RTL). Reads stay read-only;
 // the only writes are watchlist add/remove, which App passes in as handlers.
@@ -34,6 +36,29 @@ const mono = "'IBM Plex Mono', monospace";
 const SHADOW_NAME_EDGE = '-8px 0 8px -8px rgba(0, 0, 0, 0.55)';
 const SHADOW_REMOVE_EDGE = '8px 0 8px -8px rgba(0, 0, 0, 0.55)';
 
+// Sortable columns (Phase 13). name = Hebrew-aware text; the rest read off the
+// quote. Session-only state — default order stays insertion order.
+const SORT_COLS = [
+  { key: 'name', label: 'נייר', num: false },
+  { key: 'last_price', label: 'מחיר', num: true },
+  ...RET_KEYS.map((r) => ({ key: r.key, label: r.label, num: true })),
+];
+
+function sortValue(sec, key) {
+  return key === 'name' ? displayName(sec) || null : sec.quote?.[key] ?? null;
+}
+
+function applySort(rows, sort) {
+  if (!sort) return rows;
+  return [...rows].sort((a, b) => {
+    const va = sortValue(a, sort.key);
+    const vb = sortValue(b, sort.key);
+    if (va == null || vb == null) return (va == null) - (vb == null); // NULLs last, both directions
+    const c = sort.key === 'name' ? String(va).localeCompare(String(vb), 'he') : va - vb;
+    return sort.dir === 'asc' ? c : -c;
+  });
+}
+
 export default function Watchlist({ rows = [], status = 'loading', error = '', onAdd, onRemove, onOpen, mobile = false }) {
   const existingIds = rows.map((r) => r.sec_id);
   // True while the table is horizontally scrolled — gates the sticky cells'
@@ -45,6 +70,25 @@ export default function Watchlist({ rows = [], status = 'loading', error = '', o
   function onTableScroll(e) {
     setXScrolled(Math.abs(e.currentTarget.scrollLeft) > 1);
   }
+
+  // Phase 13: filter THEN sort (they compose; both presentation-only).
+  const [sort, setSort] = useState(null);
+  const [query, setQuery] = useState('');
+  function toggleSort(key, num) {
+    setSort((s) =>
+      s?.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: num ? 'desc' : 'asc' }
+    );
+  }
+  const q = query.trim().toLowerCase();
+  const view = applySort(
+    q
+      ? rows.filter(
+          (r) =>
+            (r.name || '').toLowerCase().includes(q) || (r.symbol || '').toLowerCase().includes(q)
+        )
+      : rows,
+    sort
+  );
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, minWidth: 0 }}>
       <div style={{ padding: '18px 24px 12px', display: 'flex', alignItems: 'baseline', gap: 10 }}>
@@ -65,6 +109,59 @@ export default function Watchlist({ rows = [], status = 'loading', error = '', o
       )}
       {status === 'ready' && rows.length === 0 && <Notice title="אין ניירות ברשימה" />}
 
+      {status === 'ready' && rows.length > 0 && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: mobile ? '0 16px 8px' : '0 24px 8px' }}>
+          {/* In-list filter — clears via ✕ (inline-end in RTL = left) or Escape */}
+          <div style={{ position: 'relative', flex: 1, maxWidth: 320 }}>
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => e.key === 'Escape' && setQuery('')}
+              placeholder="סינון לפי שם או סימול…"
+              style={{
+                width: '100%', boxSizing: 'border-box', background: t.surf,
+                border: `1px solid ${t.bd}`, borderRadius: 8, color: t.txt,
+                fontSize: 13, fontFamily: 'Heebo, sans-serif',
+                padding: '7px 12px', paddingInlineEnd: 30, outline: 'none',
+              }}
+            />
+            {query && (
+              <button
+                onClick={() => setQuery('')}
+                title="ניקוי"
+                style={{
+                  position: 'absolute', insetInlineEnd: 4, top: '50%', transform: 'translateY(-50%)',
+                  background: 'none', border: 'none', color: t.mut, fontSize: 14,
+                  cursor: 'pointer', padding: '2px 6px', fontFamily: 'Heebo, sans-serif',
+                }}
+              >
+                ×
+              </button>
+            )}
+          </div>
+          {/* Mobile has no headers to click — sorting via a compact select */}
+          {mobile && (
+            <select
+              value={sort ? sort.key : ''}
+              onChange={(e) => {
+                const col = SORT_COLS.find((c) => c.key === e.target.value);
+                setSort(col ? { key: col.key, dir: col.num ? 'desc' : 'asc' } : null);
+              }}
+              style={{
+                background: t.surf, border: `1px solid ${t.bd}`, borderRadius: 8,
+                color: t.txt, fontSize: 13, fontFamily: 'Heebo, sans-serif', padding: '7px 8px',
+              }}
+            >
+              <option value="">סדר מקורי</option>
+              {SORT_COLS.map((c) => (
+                <option key={c.key} value={c.key}>{c.label}</option>
+              ))}
+            </select>
+          )}
+        </div>
+      )}
+      {status === 'ready' && rows.length > 0 && view.length === 0 && <Notice title="אין תוצאות לסינון" />}
+
       {/* MOBILE: cards per the design_reference mockup (container: column,
           gap 10, padding 6/16/16, y-scroll with momentum). The desktop branch
           below is byte-identical to before the mobile build. */}
@@ -82,7 +179,7 @@ export default function Watchlist({ rows = [], status = 'loading', error = '', o
             padding: '6px 16px 16px',
           }}
         >
-          {rows.map((sec) => (
+          {view.map((sec) => (
             <SecurityCard key={sec.sec_id} sec={sec} onRemove={onRemove} onOpen={onOpen} />
           ))}
         </div>
@@ -101,8 +198,8 @@ export default function Watchlist({ rows = [], status = 'loading', error = '', o
               children resolve identical track sizes — they cannot misalign,
               because neither the template nor the available width can differ. */}
           <div style={{ minWidth: 'min-content', display: 'flex', flexDirection: 'column' }}>
-            <HeaderRow xScrolled={xScrolled} />
-            {rows.map((sec) => (
+            <HeaderRow xScrolled={xScrolled} sort={sort} onSort={toggleSort} />
+            {view.map((sec) => (
               <Row key={sec.sec_id} sec={sec} onRemove={onRemove} onOpen={onOpen} xScrolled={xScrolled} />
             ))}
           </div>
@@ -112,8 +209,28 @@ export default function Watchlist({ rows = [], status = 'loading', error = '', o
   );
 }
 
-function HeaderRow({ xScrolled }) {
+// Clickable sort header — keyboard accessible (focusable, Enter/Space toggles).
+// The ▲/▼ rides the text flow, so RTL places it on the label's inline-end side
+// with no absolute positioning to break the sticky column.
+function SortLabel({ col, sort, onSort, style }) {
+  const active = sort?.key === col.key;
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => onSort(col.key, col.num)}
+      onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), onSort(col.key, col.num))}
+      style={{ cursor: 'pointer', userSelect: 'none', color: active ? t.txt : t.mut, ...style }}
+    >
+      {col.label}
+      {active && <span style={{ fontSize: 8, marginInlineStart: 3 }}>{sort.dir === 'asc' ? '▲' : '▼'}</span>}
+    </div>
+  );
+}
+
+function HeaderRow({ xScrolled, sort, onSort }) {
   const cell = { textAlign: 'left', fontSize: 11, color: t.mut };
+  const [nameCol, priceCol, ...retCols] = SORT_COLS;
   return (
     <div
       style={{
@@ -136,7 +253,10 @@ function HeaderRow({ xScrolled }) {
     >
       {/* Corner cell: sticky on BOTH axes (top via the parent, inline via
           itself). insetInlineStart resolves to RIGHT under dir=rtl. */}
-      <div
+      <SortLabel
+        col={nameCol}
+        sort={sort}
+        onSort={onSort}
         style={{
           position: 'sticky',
           insetInlineStart: 0,
@@ -144,15 +264,11 @@ function HeaderRow({ xScrolled }) {
           background: t.bg,
           boxShadow: xScrolled ? SHADOW_NAME_EDGE : 'none',
         }}
-      >
-        נייר
-      </div>
-      <div style={cell}>מחיר</div>
+      />
+      <SortLabel col={priceCol} sort={sort} onSort={onSort} style={cell} />
       <div style={cell}>יומי</div>
-      {RET_KEYS.map((r) => (
-        <div key={r.key} style={cell}>
-          {r.label}
-        </div>
+      {retCols.map((c) => (
+        <SortLabel key={c.key} col={c} sort={sort} onSort={onSort} style={cell} />
       ))}
       {/* The ✕ column's header slot — sticky at the opposite edge, like the
           cells below it, so the corner stays clean while x-scrolling. */}
