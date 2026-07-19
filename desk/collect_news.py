@@ -151,7 +151,7 @@ def fetch_gdelt(query: str, timespan: str, maxrecords: int) -> list[dict]:
         f"&maxrecords={maxrecords}&timespan={timespan}"
     )
     req = urllib.request.Request(url, headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=20) as r:
+    with urllib.request.urlopen(req, timeout=20) as r:  # 20s cap — a stall can't eat the step
         data = json.loads(r.read())
     items = []
     for a in data.get("articles", []):
@@ -167,6 +167,68 @@ def fetch_gdelt(query: str, timespan: str, maxrecords: int) -> list[dict]:
     return items
 
 
+# 12C-FIX: one call per security starved the 15m step (~50 GLOBAL securities x
+# (call + 1s sleep + multi-minute 429 cooldowns)). Batched ORed queries cut
+# ~50 calls to ~9; a consecutive-429 circuit breaker stops burning budget on a
+# rate-limited IP mid-run.
+GDELT_BATCH = 6
+GDELT_BREAKER = 3
+
+
+def _gdelt_needles(name: str) -> set[str]:
+    """The 12C relevance guard's needle set (logic unchanged)."""
+    return {t for t in norm_tokens(name or "") if len(t) >= 3}
+
+
+def attribute_gdelt_batch(batch: list[dict], arts: list[dict]) -> tuple[dict, int]:
+    """Attribute one batch's articles per security via the relevance guard.
+    Multi-match goes to ALL passing securities (rare, legitimate). Returns
+    ({sec_id: [items]}, offtopic_count)."""
+    per = {s["sec_id"]: [] for s in batch}
+    offtopic = 0
+    for it in arts:
+        toks = norm_tokens(it["title"])
+        hits = [s for s in batch if _gdelt_needles(s["name"]) <= toks]
+        for s in hits:
+            per[s["sec_id"]].append(it)
+        offtopic += 0 if hits else 1
+    return per, offtopic
+
+
+def prefetch_gdelt(global_secs: list[dict]) -> tuple[dict, int]:
+    """ONE GDELT call per GDELT_BATCH securities. 3 consecutive 429s open the
+    circuit — remaining batches skipped this run; any success resets the
+    counter. Securities absent from the result = their batch wasn't fetched."""
+    items_by_sec, offtopic, streak = {}, 0, 0
+    for bi in range(0, len(global_secs), GDELT_BATCH):
+        batch = global_secs[bi:bi + GDELT_BATCH]
+        if bi:
+            time.sleep(1)  # politeness — between batch calls only
+        names = " OR ".join(f'"{s["name"]}"' for s in batch)
+        try:
+            arts = fetch_gdelt(f"({names}) sourcelang:english", "3d", 75)
+            streak = 0
+        except urllib.error.HTTPError as e:
+            log.warning("gdelt HTTP %d for batch of %d — skipped", e.code, len(batch))
+            if e.code == 429:
+                streak += 1
+                if streak >= GDELT_BREAKER:
+                    log.warning(
+                        "GDELT circuit open — skipping remaining %d GLOBAL securities this run",
+                        len(global_secs) - bi - len(batch),
+                    )
+                    break
+            continue
+        except Exception as e:
+            log.warning("gdelt batch failed: %s", e)
+            continue
+        per, un = attribute_gdelt_batch(batch, arts)
+        items_by_sec.update(per)
+        offtopic += un
+        log.info("GDELT batch: read=%d attributed=%d skipped_offtopic=%d", len(arts), len(arts) - un, un)
+    return items_by_sec, offtopic
+
+
 def collect() -> None:
     engine = get_engine()
     init_db(engine)
@@ -179,7 +241,9 @@ def collect() -> None:
         log.warning("NEWS finnhub key missing — falling back to Google News for US")
 
     groups = recent_title_groups(engine, now)
-    total_read = total_inserted = total_dup = total_stale = total_similar = total_offtopic = 0
+    gdelt_items, gdelt_offtopic = prefetch_gdelt([s for s in secs if s["market"] == "GLOBAL"])
+    total_read = total_inserted = total_dup = total_stale = total_similar = 0
+    total_offtopic = gdelt_offtopic  # counted per batch, not per security
     for sec in secs:
         use_finnhub = sec["market"] == "US" and bool(finnhub_key)
         use_gdelt = sec["market"] == "GLOBAL"
@@ -188,8 +252,9 @@ def collect() -> None:
             if use_finnhub:
                 items = fetch_finnhub(sec["symbol"], finnhub_key, now)
             elif use_gdelt:
-                items = fetch_gdelt(f'"{sec["name"]}" sourcelang:english', "3d", 50)
-                time.sleep(1)  # politeness — GDELT calls only
+                if sec["sec_id"] not in gdelt_items:
+                    continue  # batch 429/failed or circuit open — already logged
+                items = gdelt_items[sec["sec_id"]]  # pre-attributed, guard applied
             else:
                 items = fetch_feed(rss_url_for(sec))
         except urllib.error.HTTPError as e:
@@ -205,10 +270,8 @@ def collect() -> None:
         # inserted= is the LITERAL insert count — ON CONFLICT DO NOTHING reports
         # rowcount 0 on a duplicate — and duplicate=/skipped_stale= name the
         # other two outcomes explicitly.
-        # Relevance guard (GDELT only): free-text search over the world's press
-        # returns plenty of off-topic hits for generic company names, so ALL
-        # name tokens (len>=3) must appear in the title. Deterministic, no scoring.
-        name_needles = {t for t in norm_tokens(sec["name"] or "") if len(t) >= 3}
+        # GDELT relevance filtering already happened at the batch stage
+        # (attribute_gdelt_batch); per-security offtopic stays 0 by design.
         group = groups.setdefault(sec["sec_id"], [])
         inserted = stale = similar = offtopic = 0
         with engine.begin() as conn:
@@ -217,9 +280,6 @@ def collect() -> None:
                     stale += 1
                     continue
                 toks = norm_tokens(it["title"])
-                if use_gdelt and not name_needles <= toks:
-                    offtopic += 1
-                    continue
                 if any(is_similar(toks, t) for t in group):
                     similar += 1
                     continue
