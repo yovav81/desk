@@ -175,6 +175,13 @@ GDELT_BATCH = 6
 GDELT_BREAKER = 3
 
 
+def gdelt_active(now) -> bool:
+    """12C-FIX2: GDELT from CI is intermittently 429'd (shared runner IPs) and
+    timespan=3d loses nothing hourly — so only the :02 run on the dispatch grid
+    (minute<15) spends the budget. GDELT_FORCE=1 bypasses (manual checks)."""
+    return os.environ.get("GDELT_FORCE") == "1" or now.minute < 15
+
+
 def _gdelt_needles(name: str) -> set[str]:
     """The 12C relevance guard's needle set (logic unchanged)."""
     return {t for t in norm_tokens(name or "") if len(t) >= 3}
@@ -241,7 +248,11 @@ def collect() -> None:
         log.warning("NEWS finnhub key missing — falling back to Google News for US")
 
     groups = recent_title_groups(engine, now)
-    gdelt_items, gdelt_offtopic = prefetch_gdelt([s for s in secs if s["market"] == "GLOBAL"])
+    if gdelt_active(now):
+        gdelt_items, gdelt_offtopic = prefetch_gdelt([s for s in secs if s["market"] == "GLOBAL"])
+    else:
+        log.info("GDELT gated off this run (minute>=15)")
+        gdelt_items, gdelt_offtopic = {}, 0  # GLOBAL takes the circuit-open skip path
     total_read = total_inserted = total_dup = total_stale = total_similar = 0
     total_offtopic = gdelt_offtopic  # counted per batch, not per security
     for sec in secs:

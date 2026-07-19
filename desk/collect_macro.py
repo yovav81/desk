@@ -23,7 +23,7 @@ from sqlalchemy import select
 # definition (Google News archive noise). Globes is a curated latest-N feed and
 # probably never trips it, but that is an assumption; the skipped_stale counter
 # measures it instead of trusting it.
-from desk.collect_news import SIMILAR_HOURS, fetch_gdelt, is_similar, is_stale, norm_tokens
+from desk.collect_news import SIMILAR_HOURS, fetch_gdelt, gdelt_active, is_similar, is_stale, norm_tokens
 from desk.db import get_engine, init_db, insert_ignore, news
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -86,6 +86,9 @@ def collect() -> None:
         ]
     total_read = total_inserted = total_dup = total_stale = total_similar = 0
     for source, url in MACRO_FEEDS + [("gdelt_macro", None)]:
+        if url is None and not gdelt_active(now):
+            log.info("GDELT gated off this run (minute>=15)")
+            continue
         try:
             items = fetch_gdelt(GDELT_MACRO_QUERY, "1d", 30) if url is None else fetch_feed(url)
         except Exception as e:
