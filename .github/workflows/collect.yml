@@ -41,7 +41,7 @@ jobs:
           fi
 
       - name: Collect news
-        timeout-minutes: 5
+        timeout-minutes: 15
         env:
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
         run: python -m desk.collect_news
