@@ -12,6 +12,7 @@ column is in Hebrew (Google News hl/gl is set to he/IL for market=TASE).
 import json
 import logging
 import os
+import re
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -48,6 +49,40 @@ def is_stale(published_at, now) -> bool:
     if published_at.tzinfo is None:
         published_at = published_at.replace(tzinfo=timezone.utc)
     return published_at < now - timedelta(days=STALE_DAYS)
+
+
+# Near-duplicate suppression (Phase 12D): the same story now arrives from
+# several sources with different URLs and slightly different titles, so the
+# UNIQUE(url) guard can't catch it. Token-set Jaccard within a 72h window,
+# grouped per sec_id (macro = the NULL group). Skips are counted, never deleted.
+SIMILAR_HOURS = 72
+
+
+def norm_tokens(title: str) -> set[str]:
+    """Punctuation/quotes/brackets stripped, latin lowercased, whitespace
+    tokens of len>=2 (Hebrew is untouched by lower())."""
+    cleaned = re.sub(r"[^\w\s]|_", " ", (title or "").lower())
+    return {t for t in cleaned.split() if len(t) >= 2}
+
+
+def is_similar(a_tokens: set[str], b_tokens: set[str]) -> bool:
+    """Jaccard >= 0.75 AND at least 4 shared tokens."""
+    inter = len(a_tokens & b_tokens)
+    union = len(a_tokens | b_tokens)
+    return union > 0 and inter / union >= 0.75 and inter >= 4
+
+
+def recent_title_groups(engine, now) -> dict:
+    """ONE query per run: last SIMILAR_HOURS of (sec_id, title) as token sets
+    grouped by sec_id. Rows with published_at NULL are outside the window."""
+    stmt = select(news.c.sec_id, news.c.title).where(
+        news.c.published_at >= now - timedelta(hours=SIMILAR_HOURS)
+    )
+    groups: dict = {}
+    with engine.connect() as conn:
+        for sec_id, title in conn.execute(stmt):
+            groups.setdefault(sec_id, []).append(norm_tokens(title))
+    return groups
 
 
 def watchlisted_securities(engine) -> list[dict]:
@@ -115,7 +150,8 @@ def collect() -> None:
     if not finnhub_key and any(s["market"] == "US" for s in secs):
         log.warning("NEWS finnhub key missing — falling back to Google News for US")
 
-    total_read = total_inserted = total_dup = total_stale = 0
+    groups = recent_title_groups(engine, now)
+    total_read = total_inserted = total_dup = total_stale = total_similar = 0
     for sec in secs:
         use_finnhub = sec["market"] == "US" and bool(finnhub_key)
         try:
@@ -136,11 +172,16 @@ def collect() -> None:
         # inserted= is the LITERAL insert count — ON CONFLICT DO NOTHING reports
         # rowcount 0 on a duplicate — and duplicate=/skipped_stale= name the
         # other two outcomes explicitly.
-        inserted = stale = 0
+        group = groups.setdefault(sec["sec_id"], [])
+        inserted = stale = similar = 0
         with engine.begin() as conn:
             for it in items:
                 if is_stale(it["published_at"], now):
                     stale += 1
+                    continue
+                toks = norm_tokens(it["title"])
+                if any(is_similar(toks, t) for t in group):
+                    similar += 1
                     continue
                 stmt = insert_ignore(engine, news, ["url"]).values(
                     sec_id=sec["sec_id"],
@@ -153,20 +194,22 @@ def collect() -> None:
                 result = conn.execute(stmt)
                 if result.rowcount:
                     inserted += 1
+                    group.append(toks)
 
-        dup = len(items) - inserted - stale
+        dup = len(items) - inserted - stale - similar
         total_read += len(items)
         total_inserted += inserted
         total_dup += dup
         total_stale += stale
+        total_similar += similar
         log.info(
-            "%s (%s): read=%d inserted=%d duplicate=%d skipped_stale=%d",
-            sec["sec_id"], sec["name"], len(items), inserted, dup, stale,
+            "%s (%s): read=%d inserted=%d duplicate=%d skipped_stale=%d skipped_similar=%d",
+            sec["sec_id"], sec["name"], len(items), inserted, dup, stale, similar,
         )
 
     log.info(
-        "done: read=%d inserted=%d duplicate=%d skipped_stale=%d",
-        total_read, total_inserted, total_dup, total_stale,
+        "done: read=%d inserted=%d duplicate=%d skipped_stale=%d skipped_similar=%d",
+        total_read, total_inserted, total_dup, total_stale, total_similar,
     )
 
 

@@ -14,7 +14,7 @@ Google News collector. Add more feeds by extending MACRO_FEEDS.
 import logging
 import urllib.request
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
 from sqlalchemy import select
@@ -23,7 +23,7 @@ from sqlalchemy import select
 # definition (Google News archive noise). Globes is a curated latest-N feed and
 # probably never trips it, but that is an assumption; the skipped_stale counter
 # measures it instead of trusting it.
-from desk.collect_news import is_stale
+from desk.collect_news import SIMILAR_HOURS, is_similar, is_stale, norm_tokens
 from desk.db import get_engine, init_db, insert_ignore, news
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -68,7 +68,19 @@ def collect() -> None:
     init_db(engine)
 
     now = datetime.now(timezone.utc)
-    total_read = total_inserted = total_dup = total_stale = 0
+    # Near-dup group (Phase 12D): ONE query per run — last SIMILAR_HOURS of
+    # macro titles (sec_id NULL). Shared across feeds, so the same story on
+    # Globes AND Ynet is caught; inserted titles join it for intra-run dupes.
+    with engine.connect() as conn:
+        known = [
+            norm_tokens(t) for (t,) in conn.execute(
+                select(news.c.title).where(
+                    news.c.sec_id.is_(None),
+                    news.c.published_at >= now - timedelta(hours=SIMILAR_HOURS),
+                )
+            )
+        ]
+    total_read = total_inserted = total_dup = total_stale = total_similar = 0
     for source, url in MACRO_FEEDS:
         try:
             items = fetch_feed(url)
@@ -76,11 +88,15 @@ def collect() -> None:
             log.warning("macro feed failed for %s (%s): %s", source, url, e)
             continue
 
-        inserted = stale = 0
+        inserted = stale = similar = 0
         with engine.begin() as conn:
             for it in items:
                 if is_stale(it["published_at"], now):
                     stale += 1
+                    continue
+                toks = norm_tokens(it["title"])
+                if any(is_similar(toks, t) for t in known):
+                    similar += 1
                     continue
                 stmt = insert_ignore(engine, news, ["url"]).values(
                     sec_id=None,
@@ -93,25 +109,27 @@ def collect() -> None:
                 )
                 if conn.execute(stmt).rowcount:
                     inserted += 1
+                    known.append(toks)
 
-        dup = len(items) - inserted - stale
+        dup = len(items) - inserted - stale - similar
         total_read += len(items)
         total_inserted += inserted
         total_dup += dup
         total_stale += stale
+        total_similar += similar
         # read=0 must scream: a live feed returning nothing is how globes_markets
         # died silently for days.
         if len(items) == 0:
             log.warning("MACRO %s read=0 — FEED SILENT", source)
         else:
             log.info(
-                "MACRO %s read=%d inserted=%d duplicate=%d skipped_stale=%d",
-                source, len(items), inserted, dup, stale,
+                "MACRO %s read=%d inserted=%d duplicate=%d skipped_stale=%d skipped_similar=%d",
+                source, len(items), inserted, dup, stale, similar,
             )
 
     log.info(
-        "done: read=%d inserted=%d duplicate=%d skipped_stale=%d",
-        total_read, total_inserted, total_dup, total_stale,
+        "done: read=%d inserted=%d duplicate=%d skipped_stale=%d skipped_similar=%d",
+        total_read, total_inserted, total_dup, total_stale, total_similar,
     )
 
 
