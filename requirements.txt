@@ -1,5 +1,58 @@
-sqlalchemy>=2.0
-yfinance>=0.2
-beautifulsoup4>=4.12
-psycopg[binary]>=3.1
-playwright>=1.40
+# DESK collector dependencies — EXACT pins (Phase 15A / hardening H1).
+#
+# WHY PINNED: these installs run in CI every 5-15 min with
+# SUPABASE_SERVICE_ROLE_KEY (RLS-bypass) and DESK_DB_URL in the environment.
+# Floating ranges (>=) would pull the latest release on every run, so a single
+# malicious/compromised PyPI upload could execute at install time and exfiltrate
+# those credentials. Exact "==" pins freeze the install to the reviewed set;
+# an upgrade becomes a deliberate, reviewable commit instead of a silent event.
+#
+# Every version below is verbatim from research/freeze_snapshot.txt (a real
+# `pip freeze` of the environment the collectors run in). Do not invent versions.
+#
+# UPDATE PROCEDURE (one dep at a time, deliberately):
+#   1. Bump the single line you intend to change.
+#   2. Recreate a clean venv and `pip install -r requirements.txt`.
+#   3. `pip freeze > research/freeze_snapshot.txt` and re-pin any transitive
+#      versions that moved (from the new snapshot, verbatim).
+#   4. Run the collectors / tests, then commit the requirements.txt +
+#      freeze_snapshot.txt change together with a note on what was bumped and why.
+#
+# HASH PINNING: `pip freeze` carries no hashes and we pin offline, so this is
+# exact-version only for now. Hash pins (`--require-hashes`, closing the
+# version-reuse gap) are a follow-up — generate with `pip-compile --generate-hashes`
+# or `pip hash`; do not block H1 on it.
+
+# --- Direct dependencies (imported by desk/ collectors) ---
+SQLAlchemy==2.0.51          # desk/db.py + every collector (ORM Core)
+psycopg[binary]==3.3.4      # Postgres driver behind DESK_DB_URL (postgresql+psycopg://)
+requests==2.32.5            # collect_email.py, collect_tase_list.py, maya_client.py
+beautifulsoup4==4.14.3      # collect_email.py (bs4 HTML stripping)
+pandas==3.0.1               # collect_prices.py (price frames)
+yfinance==1.2.0             # collect_prices.py, onboarding.py (quotes/history)
+playwright==1.58.0          # maya_client.py (Incapsula cookie harvest)
+
+# --- Transitive dependencies (pulled by the above; pinned from the snapshot) ---
+psycopg-binary==3.3.4       # the [binary] extra of psycopg
+greenlet==3.5.0             # SQLAlchemy, playwright
+typing_extensions==4.15.0   # SQLAlchemy, psycopg, pyee, beautifulsoup4
+tzdata==2025.3              # psycopg, pandas
+certifi==2026.2.25          # requests, curl_cffi
+charset-normalizer==3.4.6   # requests
+idna==3.11                  # requests
+urllib3==2.6.3              # requests
+soupsieve==2.8.3            # beautifulsoup4
+numpy==2.4.3                # pandas, yfinance
+python-dateutil==2.9.0.post0 # pandas
+pytz==2026.1.post1          # pandas, yfinance
+six==1.17.0                 # python-dateutil
+pyee==13.0.1                # playwright
+multitasking==0.0.12        # yfinance
+platformdirs==4.9.4         # yfinance (cache dir)
+frozendict==2.4.7           # yfinance
+peewee==4.0.2               # yfinance
+curl_cffi==0.13.0           # yfinance (HTTP)
+protobuf==7.34.0            # yfinance
+websockets==16.0            # yfinance (streaming)
+cffi==2.0.0                 # curl_cffi
+pycparser==3.0              # cffi
