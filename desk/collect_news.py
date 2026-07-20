@@ -252,22 +252,28 @@ def collect() -> None:
         gdelt_items, gdelt_offtopic = prefetch_gdelt([s for s in secs if s["market"] == "GLOBAL"])
     else:
         log.info("GDELT gated off this run (minute>=15)")
-        gdelt_items, gdelt_offtopic = {}, 0  # GLOBAL takes the circuit-open skip path
+        gdelt_items, gdelt_offtopic = {}, 0  # GLOBAL runs Google-only this run
     total_read = total_inserted = total_dup = total_stale = total_similar = 0
     total_offtopic = gdelt_offtopic  # counted per batch, not per security
     for sec in secs:
         use_finnhub = sec["market"] == "US" and bool(finnhub_key)
-        use_gdelt = sec["market"] == "GLOBAL"
-        src = "finnhub" if use_finnhub else ("gdelt" if use_gdelt else "google_news")
+        src = "finnhub" if use_finnhub else "google_news"
         try:
             if use_finnhub:
                 items = fetch_finnhub(sec["symbol"], finnhub_key, now)
-            elif use_gdelt:
-                if sec["sec_id"] not in gdelt_items:
-                    continue  # batch 429/failed or circuit open — already logged
-                items = gdelt_items[sec["sec_id"]]  # pre-attributed, guard applied
             else:
                 items = fetch_feed(rss_url_for(sec))
+                if sec["market"] == "GLOBAL":
+                    # 12C-PLANC: Google News is the PRIMARY GLOBAL source (it
+                    # covered GLOBAL fine pre-12C; batched GDELT calls trip the
+                    # per-IP throttle almost every active run). GDELT is an
+                    # additive bonus: attributed items (gate active + circuit
+                    # closed; else the dict is empty) are PREPENDED so they
+                    # insert first and 12D marks Google repeats as
+                    # skipped_similar, keeping the earlier/original source.
+                    items = [
+                        dict(it, source="gdelt") for it in gdelt_items.get(sec["sec_id"], [])
+                    ] + items
         except urllib.error.HTTPError as e:
             log.warning("finnhub HTTP %d for %s (%s) — skipped" if use_finnhub
                         else "feed HTTP %d for %s (%s) — skipped",
@@ -296,7 +302,7 @@ def collect() -> None:
                     continue
                 stmt = insert_ignore(engine, news, ["url"]).values(
                     sec_id=sec["sec_id"],
-                    source=src,
+                    source=it.get("source", src),
                     title=it["title"],
                     url=it["url"],
                     published_at=it["published_at"],
