@@ -42,6 +42,11 @@ input::placeholder {
     transform: none;
   }
 }
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 
 /* Mobile shell (App.jsx mobile tree). dvh = the VISIBLE viewport on phones —
    100vh overshoots behind the iOS URL bar; the vh line is the fallback for

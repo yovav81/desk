@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { supabase } from './supabaseClient';
 
 // Fetches the four source types into ONE unified, type-tagged list (fetched
@@ -60,6 +60,11 @@ export function useNews(refreshTick) {
   const [items, setItems] = useState([]);
   const [status, setStatus] = useState('loading'); // loading | ready | error
   const [error, setError] = useState('');
+  // fetchedAt = client time of the last SUCCESSFUL fetch (drives "עודכן: לפני X");
+  // manualTick = refresh()'s signal, re-running the SAME load() (no new query).
+  const [fetchedAt, setFetchedAt] = useState(null);
+  const [manualTick, setManualTick] = useState(0);
+  const refresh = useCallback(() => setManualTick((n) => n + 1), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -103,18 +108,18 @@ export function useNews(refreshTick) {
 
       setItems([...web, ...emails, ...filings]);
       setStatus('ready');
+      setFetchedAt(Date.now());
     }
 
     load();
     return () => {
       cancelled = true;
     };
-    // refreshTick re-runs the fetch (auto-refresh). load() never sets status
-    // back to 'loading', so a refetch swaps items in without a flicker; the
-    // cancelled guard drops a superseded fetch.
-  }, [refreshTick]);
+    // refreshTick (auto-refresh) + manualTick (refresh button) both re-run the
+    // fetch. status never returns to 'loading', so refetches swap in flicker-free.
+  }, [refreshTick, manualTick]);
 
-  return { items, status, error };
+  return { items, status, error, fetchedAt, refresh };
 }
 
 // Detail page: the four source types for ONE security, newest first. Filtered

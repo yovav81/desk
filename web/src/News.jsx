@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { theme as t } from './theme';
 import { useNews } from './useNews';
 import { FeedItem, Notice } from './FeedItem';
@@ -16,8 +16,16 @@ const TABS = [
 ];
 
 export default function News({ watchSecIds = [], secLabels = {}, watchReady = true, refreshTick, mobile = false }) {
-  const { items, status, error } = useNews(refreshTick);
+  const { items, status, error, fetchedAt, refresh } = useNews(refreshTick);
   const [tab, setTab] = useState('all'); // default: הכל
+
+  const [spinning, setSpinning] = useState(false); // icon spins until fetchedAt advances
+  const [, forceRel] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => forceRel((n) => n + 1), 30000);
+    return () => clearInterval(id);
+  }, []);
+  useEffect(() => setSpinning(false), [fetchedAt]);
 
   // Freshness readout: the timestamp of the NEWEST item across the whole feed
   // (not the active tab) — i.e. how recent our data is. Deliberately NOT "when
@@ -68,11 +76,34 @@ export default function News({ watchSecIds = [], secLabels = {}, watchReady = tr
           flexWrap: 'wrap',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{ fontSize: 16, fontWeight: 700 }}>חדשות</div>
           {status === 'ready' && lastUpdated && (
             <div style={{ fontSize: 12, color: t.mut }}>הפריט האחרון: {fmtRelative(lastUpdated)}</div>
           )}
+          <button
+            onClick={() => {
+              setSpinning(true);
+              refresh();
+            }}
+            aria-label="רענון"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 5,
+              padding: '5px 10px',
+              borderRadius: 999,
+              fontSize: 12,
+              fontFamily: 'Heebo, sans-serif',
+              cursor: 'pointer',
+              border: `1px solid ${t.bd}`,
+              background: 'transparent',
+              color: t.acc,
+            }}
+          >
+            <span style={{ display: 'inline-block', animation: spinning ? 'spin .8s linear infinite' : 'none' }}>⟳</span>
+            {fetchedAt && <span style={{ color: t.mut }}>עודכן: {fmtRelative(fetchedAt)}</span>}
+          </button>
         </div>
         {/* flexWrap: the three chips must never overflow — they wrap on a
             narrow panel (mobile, or a desktop panel dragged narrow). On
