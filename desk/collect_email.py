@@ -352,6 +352,34 @@ def _symbol_needles(sec: dict) -> set[str]:
     return out
 
 
+# Bloomberg auto-alerts: the subject is ALWAYS "<TICKER> <CC> Equity ..." — a
+# per-stock analyst-estimate alert, never macro, never about an ETF's index.
+_BBG_SUBJECT_RE = re.compile(r"^\s*(\S+)\s+([A-Z]{2})\s+Equity\b")
+
+# Bloomberg's OWN exchange codes -> our yahoo-style suffix. Bloomberg writes
+# "DSY FP Equity"; we store DSY.PA — the mismatch is why 124 Dassault alerts sat
+# unattributed. Table-driven: add a line when a new code shows up. An UNMAPPED
+# code simply falls through (no candidate is built) — deliberately no bare-ticker
+# fallback, since "AAPL CN" is a different company from our AAPL.
+BBG_SUFFIX = {"US": "", "FP": ".PA", "TT": ".TW", "SW": ".SW", "JT": ".T",
+              "JP": ".T", "KP": ".KS", "GY": ".DE", "LN": ".L"}
+
+
+def is_bbg_stock_alert(subject: str) -> bool:
+    """True for the Bloomberg per-stock subject shape (regardless of exchange)."""
+    return _BBG_SUBJECT_RE.match(subject or "") is not None
+
+
+def bbg_candidate(subject: str) -> str | None:
+    """'DSY FP Equity Standard BEst updated for 2026' -> 'DSY.PA'. None when the
+    subject isn't that shape, or its exchange code isn't in BBG_SUFFIX."""
+    m = _BBG_SUBJECT_RE.match(subject or "")
+    if not m:
+        return None
+    suffix = BBG_SUFFIX.get(m.group(2))
+    return None if suffix is None else m.group(1) + suffix
+
+
 def _resolve(hits: list[dict], tier: str) -> tuple[str | None, str | None] | None:
     """One hit wins; several = ambiguous -> NULL, loudly; none = try next scope."""
     if len(hits) == 1:
@@ -369,6 +397,12 @@ def attribute_email(subject: str, body: str, secs: list[dict]):
     """The confidence ladder. Returns (sec_id, matched_by) or (None, None).
 
     Tiers, strict order — subject outranks body within each tier:
+      0. 'bbg'    — a Bloomberg per-stock subject, mapped exchange code -> our
+                    symbol. EXCLUSIVE: if the subject has that shape, no lower
+                    tier may run, because the body of an alert about an
+                    untracked stock routinely names OTHER companies and would
+                    mis-attribute. Miss here = (None, None), and the caller
+                    drops the message entirely (it is not macro).
       1. 'secnum' — a 6-9 digit TASE security number as a standalone token
       2. 'symbol' — an English ticker as a whole word (len>=2; 1-letter
                     symbols like C are structurally excluded)
@@ -376,6 +410,15 @@ def attribute_email(subject: str, body: str, secs: list[dict]):
     Multi-match at any tier -> (None, None) + warning. No match -> (None, None):
     NULL sec_id is the legitimate macro home, never a guess.
     """
+    cand = bbg_candidate(subject)
+    if cand:  # tier 0: Bloomberg ticker+exchange -> our symbol (whole match)
+        want = cand.lower()
+        hits = [s for s in secs
+                if want in {str(s.get("symbol") or "").lower(), str(s.get("yahoo_symbol") or "").lower()}]
+        return _resolve(hits, "bbg") or (None, None)
+    if is_bbg_stock_alert(subject):
+        return None, None  # per-stock shape, unmapped exchange — never macro
+
     scopes = [_tokens(subject), _tokens(body)]
 
     for scope in scopes:  # tier 1: security number
@@ -475,8 +518,8 @@ def collect() -> None:
         log.info("EMAIL search n=%d", len(ids))
 
         fetched = new_count = dup_count = tagged = 0
-        attachments_saved = skipped_oversize = 0
-        by_tier = {"secnum": 0, "symbol": 0, "name": 0}
+        attachments_saved = skipped_oversize = skipped_untracked_stock = 0
+        by_tier = {"bbg": 0, "secnum": 0, "symbol": 0, "name": 0}
         for i, msg_id in enumerate(ids, 1):
             try:
                 log.info("EMAIL fetch %d/%d", i, len(ids))
@@ -499,6 +542,15 @@ def collect() -> None:
                         received_at = None
                 body_text = extract_body_text(msg)
                 sec_id, matched_by = attribute_email(subject, body_text, secs)
+                # A Bloomberg per-stock alert we can't map to a watched security
+                # is about a stock we don't track — it is NOT macro, so it is
+                # dropped instead of polluting the macro tab. Marked \\Seen: a
+                # deliberate skip is a completed outcome, not a failure to retry.
+                if sec_id is None and is_bbg_stock_alert(subject):
+                    skipped_untracked_stock += 1
+                    log.info("  %r -> BBG per-stock alert, untracked — skipped", subject[:60])
+                    imap.store(msg_id, "+FLAGS", "\\Seen")
+                    continue
                 if sec_id:
                     tagged += 1
                     by_tier[matched_by] += 1
@@ -544,11 +596,11 @@ def collect() -> None:
         # The summary that measures real-world attribution recall, per tier —
         # the collect_enrich pattern. Ambiguous cases appear as WARNINGs above.
         log.info(
-            "done: fetched=%d new=%d duplicate=%d attributed=%d (secnum=%d symbol=%d name=%d) none=%d "
-            "attachments_saved=%d skipped_oversize=%d retention_deleted=%d",
+            "done: fetched=%d new=%d duplicate=%d attributed=%d (bbg=%d secnum=%d symbol=%d name=%d) none=%d "
+            "skipped_untracked_stock=%d attachments_saved=%d skipped_oversize=%d retention_deleted=%d",
             fetched, new_count, dup_count, tagged,
-            by_tier["secnum"], by_tier["symbol"], by_tier["name"], fetched - tagged,
-            attachments_saved, skipped_oversize, retention_deleted,
+            by_tier["bbg"], by_tier["secnum"], by_tier["symbol"], by_tier["name"], fetched - tagged,
+            skipped_untracked_stock, attachments_saved, skipped_oversize, retention_deleted,
         )
     finally:
         try:
