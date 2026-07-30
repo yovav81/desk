@@ -3,6 +3,17 @@ import { theme as t } from './theme';
 import { supabase } from './supabaseClient';
 import { fmtRelative, fmtSize } from './format';
 
+// Feed URLs arrive from external sources (finnhub/gdelt/google news/ynet/
+// globes/maya/sec) via the DB. React escapes TEXT but does NOT block a
+// javascript:/data: URI in an href — a poisoned feed link would be stored XSS
+// on click. Scheme allowlist only (http/https), never a domain allowlist.
+// Anchored at the start after trimming, so any prefix (whitespace, NUL) fails.
+function safeUrl(url) {
+  if (typeof url !== 'string') return null;
+  const u = url.trim();
+  return /^https?:\/\//i.test(u) ? u : null;
+}
+
 // One feed item + its source-type badge, shared by the dashboard news panel
 // (News.jsx) and the security detail page (Detail.jsx) so the four source types
 // always look identical wherever they appear.
@@ -69,6 +80,9 @@ export function FeedItem({ item, secLabel }) {
     });
   }
 
+  // An unsafe url degrades to the existing plain-text title branch below.
+  const linkUrl = safeUrl(item.url);
+
   return (
     <div style={{ padding: '14px 0', borderBottom: `1px solid ${t.bd}`, display: 'flex', flexDirection: 'column', gap: 6 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -100,9 +114,9 @@ export function FeedItem({ item, secLabel }) {
         )}
         {time && <span style={{ fontSize: 11.5, color: t.mut }}>{time}</span>}
       </div>
-      {item.url ? (
+      {linkUrl ? (
         <a
-          href={item.url}
+          href={linkUrl}
           target="_blank"
           rel="noreferrer"
           dir="auto"
@@ -222,12 +236,16 @@ function AttachmentChip({ att }) {
       .from('email-attachments')
       .createSignedUrl(att.storage_path, 60);
     setBusy(false);
-    if (error || !data?.signedUrl) {
+    // Same scheme guard as feed links: signed URLs are always https, so this
+    // costs nothing — but the guard is applied uniformly to every navigation
+    // built from stored data, never case-by-case.
+    const href = safeUrl(data?.signedUrl);
+    if (error || !href) {
       if (win) win.close();
       setFailed(true);
       return;
     }
-    if (win) win.location = data.signedUrl;
+    if (win) win.location = href;
   }
 
   return (
