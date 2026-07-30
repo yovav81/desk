@@ -482,6 +482,111 @@
       send-to-top ⤒; ArrowUp/Down stepping on the focused handle preserved as
       the keyboard path. Verified desktop + mobile.
 
+## Phase 15: security audit + hardening — DONE (2026-07-30)
+- [x] Audit: CRITICAL 0, HIGH 2, MEDIUM 5, LOW 6 — all HIGH+MEDIUM technical
+      items now CLOSED. research/SECURITY_AUDIT_FINDINGS.md.
+- [x] 15B (sql/007) — blanket GRANTs revoked: `anon` has ZERO table
+      privileges; `authenticated` keeps SELECT everywhere (RLS filters) + only
+      the writes the app needs (watchlist ins/upd/del, securities ins, users
+      ins, profiles upd). ALTER DEFAULT PRIVILEGES fixed so new tables aren't
+      born open. Applied in prod.
+- [x] 15A — requirements.txt fully pinned: 30 exact `==` pins (7 direct + 23
+      transitive) from a real pip freeze; `requests` added as an explicit
+      direct dep. Hash pinning deferred (see Open items).
+- [x] 15C — `safeUrl()` in FeedItem.jsx: feed links + attachment navigation
+      must match `^https?://` or render as plain text (blocks javascript:/data:
+      from a poisoned feed). Defense-in-depth — all current sources emit http(s).
+- [x] 15D — `permissions: contents: read` on collect/filings/tase_list, and
+      every action SHA-pinned (checkout 11d5960 v4.4.0, setup-python a26af69
+      v5.6.0, cache 0057852 v4.3.0) — mutable tags in jobs holding
+      SUPABASE_SERVICE_ROLE_KEY.
+- [x] 15E (sql/008) — EXECUTE revoked from anon+authenticated on all five
+      SECURITY DEFINER functions (each confirmed prosecdef=true → RLS
+      unaffected).
+
+## Phase 16: email attribution + asset_type + macro routing — DONE (2026-07-30)
+- [x] 16B — `linkifyText` makes http(s) URLs inside plain-text email bodies
+      clickable via safeUrl. Still no HTML rendering.
+- [x] 16C — securities.asset_type populated from yfinance quoteType
+      (collect_enrich second pass, `fast_info.quote_type`): etf 50, stock 173,
+      fund 1. Idempotent via `asset_type_checked_at` (sql/009) — stamped on
+      every completed check, selection is `checked_at IS NULL`, so the set
+      drains instead of re-fetching every equity forever.
+- [x] 16D/16F — Bloomberg `bbg` tier: BBG_SUFFIX maps venue codes to our
+      symbols (US/UN/UW/UQ/UR/UA/UP → bare, FP .PA, TT .TW, SW .SW, JT/JP .T,
+      KP .KS, GY .DE, LN .L, IM .MI, SM .MC, NA .AS, BB .BR, SS .ST, HK .HK,
+      AU .AX, CN .TO, SJ .JO). Mapped+tracked → attribute; mapped+untracked →
+      SKIP (skipped_untracked_stock); UNMAPPED → keep NULL + WARNING +
+      bbg_unmapped_code (never guess a bare ticker — AAPL CN is a foreign twin).
+- [x] 16E — macro tab = items with no sec_id PLUS items attributed to an
+      ETF/fund; stock-attributed items excluded. asset_type from a
+      session-level securities fetch in App.jsx (the watchlist alone has no
+      ETFs); unresolvable sec_id counts as NOT macro.
+- [x] 16G — Bloomberg `bbgname` tier: "<COMPANY NAME>: <action>" normalized
+      (uppercase, punctuation stripped, corporate suffixes dropped); ≥8
+      significant chars → prefix match either direction (Bloomberg truncates to
+      ~28 chars), <8 → exact equality (APPLE/VISA attributable, APPLEBEES can't
+      claim APPLE). All-caps + multi-word required, else "Morning Brief:" and
+      "AAPL: earnings" would be swallowed. No match → skip.
+- [x] Data cleanup: ~4,560 Bloomberg per-stock emails deleted in two passes
+      (BEst/Equity/Halt patterns, then "<COMPANY>: Files/Target Px" excluding
+      DASSAULT/JAPAN EXCHANGE/CAMTEK/TAIWAN SEMI). 553 NULL rows left for the
+      sweep.
+
+## Phase 17: frontend — refresh, PWA, favicon — DONE (2026-07-30)
+- [x] 17A — manual refresh button + "עודכן: לפני X" on the news feed (reuses
+      the existing load(); auto-refresh timer untouched).
+- [x] 17B — PWA, installable on phone home screens + desktop:
+      manifest.webmanifest, GOLD/news icon (icon.svg master + 192/512/
+      512-maskable/apple-touch PNGs rasterized with the already-installed
+      Playwright — no new dependency), shell-only service worker (cache-first
+      for hashed assets, NETWORK-ONLY for everything else — Supabase
+      auth/REST/storage never cached; navigations network-first so a deploy
+      can't serve a stale shell), production-only registration.
+- [x] 17C — GOLD favicon replaces the Vite mark.
+
+## Phase 18: macro feeds + counter correctness — DONE (2026-07-30)
+- [x] 18 (+FIX) — two Google News SEARCH feeds in collect_macro:
+      google_world_macro (en-US: central banks / rates / inflation / global
+      economy) and google_il_macro (he-IL, site:calcalist.co.il OR
+      site:themarker.com + finance-specific terms; broad terms leaked Calcalist
+      sports — measured, then tightened: probe 10/10 on-topic, 5/5 outlet
+      split). BUSINESS topic channel deliberately not used (single-company
+      dominated). gdelt_macro stays a bonus behind its hourly gate.
+- [x] 18-FIX2/FIX3 — **counter correctness, a house-rule violation.**
+      `inserted=` was derived from items that PASSED THE GATES, not rows
+      written; ON CONFLICT DO NOTHING swallowed them and `duplicate=` was
+      always 0. MEASURED 2026-07-30: two macro runs logged inserted=31 while
+      the DB gained zero rows — and a code comment had ASSERTED rowcount was
+      reliable. Both collect_macro.py and collect_news.py now derive inserted
+      from `.returning(id)` + `first() is not None`, with
+      `duplicate = attempted - inserted`. Prod confirms: inserted 50 → 4,
+      duplicate 0 → 50. Historical per-security inserted= numbers are inflated.
+
+## Phase 19: attribution precision + sweep starvation — DONE (2026-07-30)
+- [x] 19 — WORD_LIKE_SYMBOLS blocklist (26 tickers that are common English
+      words: IT NOW COST MA TW FIX FAST GE BA V C ICE …) never match from body
+      prose (measured: a Google Alert about הפניקס was attributed to ICE).
+      ALL symbol-tier matches now also require the symbol in the SUBJECT or the
+      first 500 body chars. Logs SYMBOL_BLOCKED. Closes old Open item 10.
+- [x] 19-FIX — null-sweep starvation: it selected `sec_id IS NULL ORDER BY id
+      DESC LIMIT 200`, so failed rows re-entered the same top-200 window every
+      run and older mail was never reached (1,273 NULL rows, top 200 only).
+      Fixed with `emails.sweep_checked_at` (sql/010 + rollback): predicate is
+      now `sec_id IS NULL AND sweep_checked_at IS NULL` and EVERY examined row
+      is marked. Log gains `sweep_remaining=N`. Re-sweep after a new tier:
+      `update emails set sweep_checked_at = null where sec_id is null`
+      (SWEEP_RESET_HINT — never auto-run).
+
+## Before public launch (security, not blocking the invite-only group)
+- [ ] **15F — password reset flow** (Supabase Site/Redirect URLs must be set,
+      or link emails point at the localhost:3000 default).
+- [ ] **15G — Edge Function `is_approved` check** — the search proxy verifies
+      JWT but not approval.
+- [ ] **Signup hardening** — min password length 8+, CAPTCHA, verify the prod
+      rate limits.
+- [ ] Requirements hash pinning (deferred from 15A).
+
 ## Open items (priority order)
 1. [x] **Healthchecks.io dead-man monitor** — collect.yml pings
        HC_PING_COLLECT as its success-only LAST step (silence = alarm).
@@ -504,16 +609,27 @@
 9. [ ] **fetched_at semantics investigation** — overwritten-per-run vs
        ON-CONFLICT-preserved is UNKNOWN (evidence destroyed by the maya
        re-collect); nothing may be built on it until resolved (lesson 3d).
-10. [ ] **Email-attribution blocklist for word-symbols** (IT, NOW, COST,
-        FIX…) — born 2026-07-19: multi-match already → NULL, but a SINGLE
-        English-word ticker matching ordinary prose can misattribute; add a
-        structural blocklist tier (like the single-letter exclusion).
+10. [x] **Email-attribution blocklist for word-symbols** — DONE by Phase 19
+        (2026-07-30): WORD_LIKE_SYMBOLS + the subject/first-500-chars position
+        rule.
 11. [ ] **News retention policy** — decide 60–90d and prune; at 162
         securities the news table grows unboundedly.
 12. [ ] **GDELT decision gate** — if source='gdelt' still ~0 rows after 2-3
         days of the hourly gate -> plan C for GLOBAL news: Google News
         fallback on circuit-open, or Marketaux (100 req/day tier). Check via:
         `select count(*) from news where source='gdelt';`
+13. [ ] **16H — `name_en` column for Latin-less TASE names** (born 2026-07-30):
+        16 TASE securities (Camtek, Nova, Phoenix …) have Hebrew-only names, so
+        Bloomberg's English "<COMPANY>: Files" mail can NEVER match them via the
+        bbgname tier. Populate from yfinance longName the same way asset_type
+        was (marker column, capped per run). Count with:
+        `select count(*) from securities where market='TASE' and name !~ '[A-Za-z]';`
+14. [ ] **Dior-class relevance noise in per-ticker Google News** (born
+        2026-07-30) — a fashion article attributed to CDI.PA. The per-security
+        feed has no relevance guard equivalent to GDELT's token check.
+15. [ ] **Macro step runtime** (born 2026-07-30) — ~1m22s with four feeds (was
+        ~9s with two) against `timeout-minutes: 5`. Revisit before adding a
+        fifth feed.
 - Carried over:
   - [ ] Decide bond price source (DataHub paid EOD vs manual tier) — manual
         tier now exists as a stopgap for unpriced securities

@@ -9,8 +9,9 @@ system — always out of scope for this project.
 push; Supabase = auth + Postgres + Edge Function). All collectors run in the
 cloud: news/macro/email/enrich/prices + MAYA & SEC filings, dispatched by
 **Supabase pg_cron** (the primary clock — GitHub `schedule:` is best-effort
-fallback only). Phases 0–13 done (162 securities on watchlists; full collect
-green in ~10m); history and open items in `TODO.md`.
+fallback only). Phases 0–19 done (224 securities incl. 50 classification-only
+ETFs; full collect green in ~10m); the app is an **installable PWA**. History
+and open items in `TODO.md`.
 
 ## Folder isolation
 
@@ -88,7 +89,13 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   source `maya`), **SEC filing** (`filings` source `sec`), each tagged with a
   source-type badge (outlet name / מייל / מאיה / SEC). Tabs: **המניות שלי** =
   all four types whose `sec_id` is in the user's watchlist; **מאקרו וסקירות** =
-  `news` category `macro` + emails with `sec_id IS NULL`; **הכל** = the union.
+  items with **no `sec_id`** (macro news + unassigned emails) **PLUS anything
+  attributed to an ETF/fund** — a basket item is market reading, not company
+  news, while a stock-attributed item belongs to that security's own feed
+  (Phase 16E). `asset_type` comes from a **session-level `securities` fetch in
+  App.jsx** (mount-once, never per item) because the 50 ETFs are on no
+  watchlist; an unresolvable `sec_id` counts as NOT macro, so an unknown stock
+  item can never leak in. **הכל** = the union.
 - Data queries avoid PostgREST nested embeds (FK relationships aren't detected
   on the raw-created tables — embeds return null joins); use flat `.in()`
   queries merged in JS instead (see `useWatchlist.js`).
@@ -149,7 +156,28 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   signed URL **per click** (`createSignedUrl(path, 60)`), opening the tab
   **synchronously-then-navigating** — `window.open` after an `await` gets
   popup-blocked (Safari). `storage_path` NULL = oversize, greyed with
-  "קובץ גדול מדי — לא נשמר".
+  "קובץ גדול מדי — לא נשמר". URLs inside a body are made clickable by
+  `linkifyText` (Phase 16B) — one split on an http(s) pattern, trailing
+  punctuation and an unbalanced `)` left out of the link, each href through
+  `safeUrl`. **Still no HTML rendering and no `dangerouslySetInnerHTML`**:
+  every segment stays text React escapes; only the href is synthesized.
+- **PWA (Phase 17B)** — installable on Android/iOS home screens and desktop.
+  `web/public/manifest.webmanifest` ("GOLD news" / short "GOLD", standalone,
+  portrait, `dir: rtl`, `lang: he`, colors from `theme.js`: bg `#0A1120`,
+  accent `#D4AF37`). Icons come from ONE master, `web/public/icon.svg`,
+  rasterized to 192/512/512-maskable/apple-touch-180 with the **already
+  installed** Playwright Chromium (no new dependency, no hand-edited PNG —
+  edit the SVG and re-export; maskable insets the mark to the inner 80%).
+  iOS ignores manifest icons, hence the `apple-touch-icon` + `apple-mobile-*`
+  metas in index.html. The service worker (`web/public/sw.js`, registered
+  **production-only** — in dev it shadows Vite's module graph) is
+  **shell-only**: cache-first for same-origin hashed `/assets/*` + icons under
+  a versioned cache with an activate-time purge, **NETWORK-ONLY for everything
+  else** — Supabase auth/REST/storage never touches a cache, and no
+  authenticated data is ever stored. Navigations are **network-first** (cached
+  `/` is an offline fallback only): index.html names hashed assets, so a cached
+  shell would survive a deploy pointing at files that no longer exist.
+  Phase 17C put the GOLD mark on the favicon; the Vite mark is gone.
 - **Layout (Phase 7):** the panel split is draggable (desktop only) via
   `SplitDivider` — pointer capture + **RTL-safe ABSOLUTE math**
   (`width = rect.right − clientX`; never `movementX` deltas, whose signs are
@@ -172,7 +200,9 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   interval, **paused while the tab is hidden** (one timer in App drives both
   data hooks via `refreshTick` — never add a second timer). The news header
   shows **"הפריט האחרון"** from `max(published_at)` — deliberately NOT "when
-  the browser fetched" (that would read "עכשיו" forever and lie).
+  the browser fetched" (that would read "עכשיו" forever and lie). Phase 17A
+  added a manual refresh button + "עודכן: לפני X" (re-runs the SAME `load()`;
+  the auto-refresh timer is untouched — still exactly one timer).
 - **Watchlist UX (Phase 13):** column sorting on all 7 columns incl. daily
   (numeric first-click desc, name asc via `localeCompare('he')` on
   `displayName` — sorts what's displayed; NULLs always last; manual-tier
@@ -189,7 +219,8 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   the keyboard path. Persistence = ONE debounced (~1.5s) batched upsert of
   changed positions; error → toast + revert to server state. Mobile: same
   filter + a compact sort select; cards get the same reorder handles.
-- Current state: **deployed and live, desktop + mobile** — login + signup
+- Current state: **deployed and live, desktop + mobile + installable PWA** —
+  login + signup
   approval gate, resizable two-panel dashboard with search/add/remove,
   sticky-column watchlist with sorting/filtering and per-user drag ordering,
   detail page + chart, auto-refresh, mobile tabs with cards, and in-place
@@ -226,6 +257,8 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   EMAIL log lines (connect/login/select/search/fetch i/n/storage upload) so
   the intermittent email hang pinpoints itself. Known gaps: DNS resolution
   precedes the socket timeout, and the 60s IMAP timeout is per-read.
+  **Least privilege (15D):** every workflow declares `permissions: contents:
+  read` and pins each action to a full commit SHA — see Security posture.
 - **Scheduling — pg_cron is the clock, GitHub `schedule:` is fallback.**
   GitHub schedule events were MEASURED arriving 74–180 min apart despite */15
   and */5 crons (documented best-effort/droppable; paying doesn't help; a
@@ -248,12 +281,20 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   (Phase 12): **US → Finnhub** company-news (`FINNHUB_API_KEY`; missing key →
   one WARNING + Google News fallback), **GLOBAL → GDELT** (next bullet),
   **TASE → Google News RSS**. `collect_macro.py` writes general-economy
-  `'macro'` rows (`sec_id=NULL`) from `MACRO_FEEDS` — Globes iID=2
-  home/economy + **ynet_economy** RSS (globes_markets iID=585 went silent
-  2026-07-14 and is retired; Calcalist/Bizportal block direct RSS, don't
-  fight it) — plus a **gdelt_macro** world feed behind the GDELT gate.
+  `'macro'` rows (`sec_id=NULL`) from `MACRO_FEEDS` — four feeds (Phase 18):
+  Globes iID=2 home/economy, **ynet_economy** RSS (globes_markets iID=585 went
+  silent 2026-07-14 and is retired), **google_world_macro** (Google News SEARCH,
+  en-US: central banks / interest rates / inflation / global economy) and
+  **google_il_macro** (he-IL, `site:calcalist.co.il OR site:themarker.com` +
+  finance-specific terms — those two outlets block direct RSS, so search is the
+  way in; broad terms like כלכלה let their sports desk through, measured, so
+  the terms stay narrow: probe was 10/10 on-topic, 5/5 outlet split). The
+  **BUSINESS topic channel is deliberately not used** — it is dominated by
+  single-company stories, which is per-security news, not macro.
+  **gdelt_macro** stays behind its hourly gate as a bonus, not a dependency.
   Per-feed summary lines; read=0 logs "FEED SILENT" (a dead feed must
-  scream). Emails have **no**
+  scream). Macro cost ~1m22s with four feeds (was ~9s with two) against a
+  5-minute step timeout — check that before adding a fifth. Emails have **no**
   category column — the read-time rule is `sec_id NOT NULL` = stock,
   `sec_id NULL` = macro. The dashboard's three filters map to: **My stocks** =
   `category='stock'` ∩ the user's watchlist (+ their stock emails); **Macro &
@@ -285,18 +326,68 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   (act only on proof; stored with published_at NULL as always). Ingest-only —
   existing rows untouched. **Log vocabulary rule, learned twice:** counters are
   named literally — `read=/inserted=/duplicate=/skipped_stale=/
-  skipped_similar=/skipped_offtopic=`, where `inserted=` is the true rowcount
-  of ON CONFLICT DO NOTHING; never name a read-count `new=`.
+  skipped_similar=/skipped_offtopic=`; never name a read-count `new=`.
+- **`inserted=` must come from the DB, not from intent (Phases 18-FIX2/3).**
+  Both news collectors derive it from `.returning(news.c.id)` +
+  `conn.execute(stmt).first() is not None`, and `duplicate = attempted -
+  inserted` (`attempted` = rows that reached the insert). **Do NOT use
+  `result.rowcount` on an ON CONFLICT DO NOTHING insert** — MEASURED
+  2026-07-30: two macro runs logged `inserted=31` while the DB gained **zero**
+  rows, and `duplicate=` was structurally always 0. Prod after the fix:
+  inserted 50 → 4, duplicate 0 → 50. **Historical `inserted=` numbers in old
+  logs are inflated** — don't compare across the fix.
 - **Email attribution** (`collect_email.attribute_email`) — a strict confidence
-  ladder: security number as a standalone token > **whole-word** ticker
-  (len≥2 — **single-letter symbols are structurally excluded from text
-  matching**: Citigroup's 'C' substring-matched the 'c' in every ".com" sender
+  ladder. Two **EXCLUSIVE Bloomberg tiers** sit on top (Phases 16D/16F/16G): if
+  a subject has a Bloomberg shape it is decided there and **never** reaches the
+  symbol/name tiers, because alert text ("Volume Since Open", "Target Px
+  increased") is common English that collides with company names — that is how
+  `LSEG LN` once became LPRO (Open Lending).
+  1. **`bbg`** — `"<TICKER> <CC> Equity …"`. `BBG_SUFFIX` maps Bloomberg's own
+     venue codes to our symbols: US/UN/UW/UQ/UR/UA/UP → bare, FP `.PA`,
+     TT `.TW`, SW `.SW`, JT/JP `.T`, KP `.KS`, GY `.DE`, LN `.L`, IM `.MI`,
+     SM `.MC`, NA `.AS`, BB `.BR`, SS `.ST`, HK `.HK`, AU `.AX`, CN `.TO`,
+     SJ `.JO`. Mapped + tracked → attribute; mapped + untracked → **SKIP the
+     mail** (`skipped_untracked_stock`) — a per-stock alert is never macro;
+     **UNMAPPED code → KEEP with sec_id NULL + WARNING + `bbg_unmapped_code`**.
+     No bare-ticker fallback: `AAPL CN` is a foreign twin, and dropping mail
+     requires certainty an unknown code doesn't give. Add the code to the map
+     and the sweep claims those rows for free.
+  2. **`bbgname`** — `"<COMPANY NAME>: <action>"`, no ticker. Normalize both
+     sides (uppercase, punctuation → space, drop trailing corporate suffixes),
+     then: ≥8 significant chars → **prefix match in either direction**
+     (Bloomberg truncates names to ~28 chars: `TAIWAN SEMICONDUCTOR MANUFAC`);
+     <8 → **exact equality only**, so APPLE/VISA stay attributable while
+     APPLEBEES can't claim APPLE. Requires an **all-caps, multi-word** name —
+     without that guard `Morning Brief:` (a newsletter) and `AAPL: earnings`
+     (a ticker subject) would be swallowed and deleted. No match → skip.
+  Then the original ladder: security number as a standalone token >
+  **whole-word** ticker (len≥2 — **single-letter symbols are structurally
+  excluded**: Citigroup's 'C' substring-matched the 'c' in every ".com" sender
   and tagged ALL email as C) > distinctive Hebrew/English name tokens
-  (gershayim-normalized `בע"מ`→`בעמ`; NOISE_TOKENS strips בנק/מערכות/Ltd/…;
-  add to it freely) > **NULL = macro**. Multi-match at any tier → NULL +
-  warning — wrong attribution is worse than none. A **NULL-only sweep** each
-  run re-attributes old emails when securities are added later; a non-NULL
-  sec_id is NEVER rewritten. Never match against sender text.
+  (gershayim-normalized `בע"מ`→`בעמ`; NOISE_TOKENS strips בנק/מערכות/Ltd/…) >
+  **NULL = macro**. Multi-match at any tier → NULL + warning — wrong
+  attribution is worse than none. Never match against sender text.
+- **Symbol-tier guards (Phase 19).** `WORD_LIKE_SYMBOLS` — 26 tickers that are
+  also ordinary English words (IT, NOW, COST, MA, TW, FIX, FAST, GE, BA, V, C,
+  ICE, …) — **never match from prose**; a Google Alert about הפניקס was
+  confidently attributed to ICE, and the multi-match guard can't help when only
+  one such symbol hits. It is a blocklist of **symbols as text needles**, not of
+  securities: each stays reachable by number, by name, and by both Bloomberg
+  tiers. Suppressions log `SYMBOL_BLOCKED`. Additionally, a symbol only counts
+  as aboutness in the **SUBJECT or the first 500 body chars**
+  (`SYMBOL_BODY_CHARS`) — a ticker buried 3,000 chars into a digest is a
+  mention. The secnum and name tiers still scan the whole body.
+- **The NULL-sweep needs a marker or it starves** (`reattribute_nulls`,
+  sql/010). It re-runs the ladder over unattributed mail so a security (or a
+  new tier) added later can still claim it. It used to select
+  `sec_id IS NULL ORDER BY id DESC LIMIT 200` — a row that failed kept its id
+  and re-entered the identical top-200 window every run, so with 1,273 NULL
+  rows older mail was **never read**. Now the predicate is
+  `sec_id IS NULL AND sweep_checked_at IS NULL` and **every examined row is
+  marked**, hit or miss; the log ends with `sweep_remaining=N`. A non-NULL
+  sec_id is still NEVER rewritten. After shipping a new tier, re-open the
+  backlog with `update emails set sweep_checked_at = null where sec_id is null`
+  (the `SWEEP_RESET_HINT` constant — never auto-run).
 - **Email attachments** (`collect_email` + `desk/email_backfill.py`, sql/004) —
   files live in the **PRIVATE Storage bucket `email-attachments`** (manual
   dashboard creation), reachable only via signed URLs (storage.objects policy:
@@ -376,6 +467,18 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   hand-entered `manual_prices` are NEVER flipped (deliberate migration only).
   NO-HIT/non-TLV/no-prices → stays as-is, logged — **never guess**.
   `MAX_PER_RUN=25` caps Yahoo load; dry-run default, `--commit` in CI.
+- **`securities.asset_type` (Phase 16C)** — populated from yfinance
+  `quoteType` by a second pass in `collect_enrich` (`fast_info.quote_type`, the
+  cheap read; `.info` pulls the whole quoteSummary for the same string).
+  EQUITY→`stock`, ETF→`etf`, MUTUALFUND→`fund`, INDEX→`index`, anything else
+  stored raw-lowercased; unresolvable → row untouched and counted, never
+  fabricated. Live: **etf 50, stock 173, fund 1**. Idempotency needs a marker —
+  a row that resolves to `stock` is indistinguishable from an unchecked one, so
+  **`asset_type_checked_at`** (sql/009) is stamped on EVERY completed check and
+  the selection is `checked_at IS NULL`; the set drains monotonically instead
+  of re-fetching every equity forever. The 50 ETFs (SPY QQQ VOO XLK XLF XLE
+  XLV SMH TLT GLD …) are in `securities` but on **no watchlist** — they exist
+  to classify mail, not to be tracked.
 - **Timestamps: sources lie about timezones — convert in ONE place per
   collector.** SEC `acceptanceDateTime` says `Z` but is **US Eastern wall
   clock** (measured against the ATOM feed); `collect_sec._parse_published`
@@ -494,6 +597,34 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   findings); seeded via manual browser export or (future) TASE DataHub's
   free "Securities (Basic)" API product.
 
+## Security posture (Phase 15 — audit in research/SECURITY_AUDIT_FINDINGS.md)
+
+Audit result: CRITICAL 0, HIGH 2, MEDIUM 5, LOW 6 — every HIGH+MEDIUM
+technical item is CLOSED. What holds now:
+
+- **Grants (sql/007):** the blanket GRANTs are revoked. `anon` has **ZERO**
+  table privileges. `authenticated` keeps SELECT everywhere (RLS does the
+  filtering) and writes only where the app needs them — watchlist
+  INSERT/UPDATE/DELETE, `securities` INSERT, `users` INSERT, `profiles`
+  UPDATE. `ALTER DEFAULT PRIVILEGES` was fixed too, so a NEW table is not born
+  world-readable — but it still needs its own read policy (see the RLS gotcha).
+- **SECURITY DEFINER functions (sql/008):** EXECUTE revoked from anon +
+  authenticated on all five (each confirmed `prosecdef=true`, so RLS is
+  unaffected).
+- **Dependencies (15A):** `requirements.txt` is fully pinned — 30 exact `==`
+  pins (7 direct + 23 transitive) taken from a real `pip freeze`; `requests` is
+  now an explicit direct dep. Hash pinning deferred.
+- **Workflows (15D):** all three carry `permissions: contents: read`, and every
+  action is **SHA-pinned** (checkout `11d5960` v4.4.0, setup-python `a26af69`
+  v5.6.0, cache `0057852` v4.3.0) — tags are mutable, and these jobs hold
+  `SUPABASE_SERVICE_ROLE_KEY`. Bumping a version means bumping a SHA.
+- **URL scheme guard (15C):** `safeUrl()` in `web/src/FeedItem.jsx` — every
+  href/navigation built from stored data must match `^https?://` or it renders
+  as plain text. Blocks `javascript:`/`data:` from a poisoned feed.
+- **Still open, tagged "before public launch"** (not blocking the current
+  invite-only group): 15F password-reset flow, 15G Edge Function `is_approved`
+  check, signup hardening (min length 8+, CAPTCHA, verify prod rate limits).
+
 ## Data model rules
 
 - `watchlist` is **per-user** (FK to `users`). `securities`, `news`,
@@ -560,6 +691,19 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   pipeline passed every offline test, then the FIRST real Hebrew filename got
   HTTP 400 from Storage (non-ASCII object keys). The first production run is
   part of verification, not a formality — watch it.
+- **A counter that reports intent is a lie, and a comment asserting otherwise
+  is worse.** `inserted=` was counted from items that PASSED THE GATES, so
+  ON CONFLICT DO NOTHING swallowed rows silently and `duplicate=` was always 0
+  — two macro runs logged `inserted=31` while the DB gained nothing. A code
+  comment had ASSERTED that `rowcount` was reliable there; the assertion had
+  never been measured. Derive counts from what the DB RETURNS, and treat an
+  unmeasured assertion in a comment as unverified no matter how confident it
+  reads.
+- **A window that never advances processes the same rows forever.** The
+  null-sweep re-read the newest 200 unattributed emails every run; failures
+  kept their ids, so 1,073 older rows were unreachable — including mail a newer
+  tier would have matched. Any "retry the failures" loop needs a marker column
+  (`sweep_checked_at`, `asset_type_checked_at`) or it starves its own tail.
 - **"Already built" in docs can mean a mockup.** The mobile cards "already
   built" claim referred to design_reference markup, not code — the third
   overturned documented claim in one week (Sano tickers, the enrichment TODO,
