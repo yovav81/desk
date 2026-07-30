@@ -321,6 +321,24 @@ MIN_SYMBOL_LEN = 2
 # Name tokens shorter than 3 chars are too generic to identify a company.
 MIN_NAME_TOKEN_LEN = 3
 
+# Symbols that are ALSO ordinary English words. Matching these against prose
+# attributes confidently and WRONGLY: 'ICE' in a Google Alert's boilerplate
+# tagged a הפניקס alert as Intercontinental Exchange, and the multi-match guard
+# can't help when only one such symbol hits. This is a blocklist of SYMBOLS AS
+# TEXT NEEDLES, not of securities — every one stays reachable by security
+# number, by company name, and by both Bloomberg tiers. Extend it freely from
+# the "attribution ambiguous (symbol)" warnings.
+WORD_LIKE_SYMBOLS = frozenset({
+    "IT", "NOW", "COST", "MA", "TW", "FIX", "FAST", "GE", "BA", "V", "C", "ICE",
+    "ALL", "ON", "SO", "EAT", "KEY", "RUN", "CAR", "HAS", "BIG", "LOW", "NEW",
+    "ARE", "TRUE", "WELL",
+})
+_WORD_LIKE_LOWER = frozenset(s.lower() for s in WORD_LIKE_SYMBOLS)
+# Aboutness has a position: a ticker in the SUBJECT or in the first 500 chars of
+# the body is what the mail is about; one buried 3,000 chars into a digest is a
+# passing mention. The secnum and name tiers keep scanning the WHOLE body.
+SYMBOL_BODY_CHARS = 500
+
 
 def _tokens(text: str) -> set[str]:
     """Whole-word tokens: quotes stripped in-word, everything else split on
@@ -429,7 +447,13 @@ def is_bbg_company_subject(subject: str) -> bool:
     it, an ordinary newsletter subject ('Morning Brief: markets rally') matches
     the pattern and would be dropped as an untracked company."""
     m = _BBG_NAME_RE.match(subject or "")
-    return bool(m) and not any(c.islower() for c in m.group("name"))
+    if not m or any(c.islower() for c in m.group("name")):
+        return False
+    # Multi-word only: Bloomberg always carries the legal suffix ("CAMTEK LTD",
+    # "SONY GROUP CORP"). A single all-caps token before a colon is a TICKER
+    # subject ("AAPL: earnings beat") — that belongs to the symbol tier, and
+    # treating it as an unmatched company name would DELETE the mail.
+    return " " in m.group("name").strip()
 
 
 def is_bbg_stock_alert(subject: str) -> bool:
@@ -472,7 +496,8 @@ def attribute_email(subject: str, body: str, secs: list[dict]):
                     drops the message entirely (it is not macro).
       1. 'secnum' — a 6-9 digit TASE security number as a standalone token
       2. 'symbol' — an English ticker as a whole word (len>=2; 1-letter
-                    symbols like C are structurally excluded)
+                    symbols structurally excluded), NOT in WORD_LIKE_SYMBOLS,
+                    and appearing in the subject or the body's first 500 chars
       3. 'name'   — at least one DISTINCTIVE name token (noise stripped)
     Multi-match at any tier -> (None, None) + warning. No match -> (None, None):
     NULL sec_id is the legitimate macro home, never a guess.
@@ -509,8 +534,19 @@ def attribute_email(subject: str, body: str, secs: list[dict]):
         if result is not None:
             return result
 
-    for scope in scopes:  # tier 2: ticker as a whole word
-        hits = [s for s in secs if _symbol_needles(s) & scope]
+    # Tier 2 sees a SHORTER body than the other tiers (see SYMBOL_BODY_CHARS).
+    symbol_scopes = [scopes[0], _tokens((body or "")[:SYMBOL_BODY_CHARS])]
+    for scope in symbol_scopes:  # tier 2: ticker as a whole word
+        hits = []
+        for s in secs:
+            hit = _symbol_needles(s) & scope
+            if not hit:
+                continue
+            if not (hit - _WORD_LIKE_LOWER):  # every needle is a common word
+                log.info("SYMBOL_BLOCKED sym=%s subject=%r",
+                         "/".join(sorted(n.upper() for n in hit)), subject[:60])
+                continue
+            hits.append(s)
         result = _resolve(hits, "symbol")
         if result is not None:
             return result
