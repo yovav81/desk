@@ -14,6 +14,50 @@ function safeUrl(url) {
   return /^https?:\/\//i.test(u) ? u : null;
 }
 
+// Split on http(s) URLs with a CAPTURE group, so String.split returns
+// [text, url, text, url, …] — odd indices are the matches. One pass over the
+// body, no scanning per segment. ')' is allowed inside and trimmed below only
+// when unbalanced, so a wiki-style URL with parens survives.
+const URL_RE = /(https?:\/\/[^\s<>"'\]]+)/gi;
+
+// Sentence punctuation glued to a URL almost never belongs to it, and a ')'
+// belongs only if an earlier '(' opened it: "(ref https://x.com/a)". Bounded
+// work — this only ever walks the tail of ONE matched URL, never the body.
+function splitUrlTail(u) {
+  let end = u.length;
+  while (end > 0) {
+    const c = u[end - 1];
+    if ('.,;:!?'.includes(c)) { end -= 1; continue; }
+    if (c === ')') {
+      const head = u.slice(0, end);
+      const opens = (head.match(/\(/g) || []).length;
+      if ((head.match(/\)/g) || []).length > opens) { end -= 1; continue; }
+    }
+    break;
+  }
+  return [u.slice(0, end), u.slice(end)];
+}
+
+// Plain-text body -> React nodes with the URLs clickable. NO HTML rendering:
+// every segment is still text React escapes; only the href is synthesized, and
+// it reuses the safeUrl scheme guard — anything unsafe stays plain text.
+function linkifyText(text) {
+  return String(text).split(URL_RE).map((part, i) => {
+    if (i % 2 === 0 || !part) return part; // even index = plain text
+    const [raw, tail] = splitUrlTail(part);
+    const href = safeUrl(raw);
+    if (!href) return part;
+    return (
+      <span key={i}>
+        <a href={href} target="_blank" rel="noreferrer" style={{ color: t.acc, textDecoration: 'underline' }}>
+          {raw}
+        </a>
+        {tail}
+      </span>
+    );
+  });
+}
+
 // One feed item + its source-type badge, shared by the dashboard news panel
 // (News.jsx) and the security detail page (Detail.jsx) so the four source types
 // always look identical wherever they appear.
@@ -200,7 +244,7 @@ export function FeedItem({ item, secLabel }) {
                     textAlign: 'right',
                   }}
                 >
-                  {content.body}
+                  {linkifyText(content.body)}
                 </div>
               ) : (
                 content.atts.length === 0 && (
