@@ -386,6 +386,52 @@ BBG_SUFFIX = {
 }
 
 
+# The 4th Bloomberg shape: no ticker, no "Equity" — "<COMPANY NAME>: Files 4",
+# "<COMPANY NAME>: Target Px increased to 224 AUD ... by Macquarie". Bloomberg
+# writes the name in CAPS and TRUNCATES it to ~28 chars ("TAIWAN SEMICONDUCTOR
+# MANUFAC"), so matching is prefix-based, not exact.
+_BBG_NAME_RE = re.compile(r"^(?P<name>[A-Z][^:]{2,60}):\s+\S")
+
+# Dropped from the TAIL of both sides before comparing — they carry no identity
+# ("Japan Exchange Group, Inc." and "JAPAN EXCHANGE GROUP INC" must agree).
+_NAME_SUFFIXES = {"INC", "CORP", "CORPORATION", "LTD", "LIMITED", "PLC", "SE", "SA",
+                  "NV", "AG", "CO", "GROUP", "HOLDINGS", "HOLDING", "CLASS", "A", "REG"}
+_NAME_PUNCT_RE = re.compile(r"[.,&/\-]+")
+# Below this length a PREFIX is not evidence ("APPLE" would claim APPLEBEES), so
+# short names fall back to exact equality instead — which is safe at any length,
+# and keeps a tracked short-named security (APPLE/VISA/EBAY/SANO) from being
+# dropped as untracked just for being short.
+MIN_BBG_NAME_CHARS = 8
+
+
+def normalize_company(name: str) -> str:
+    """UPPERCASE, punctuation -> space, whitespace collapsed, trailing corporate
+    suffixes dropped: 'Japan Exchange Group, Inc.' -> 'JAPAN EXCHANGE'."""
+    words = _NAME_PUNCT_RE.sub(" ", (name or "").upper()).split()
+    while words and words[-1] in _NAME_SUFFIXES:
+        words.pop()
+    return " ".join(words)
+
+
+def _name_prefix_match(a: str, b: str) -> bool:
+    """Prefix match in BOTH directions (Bloomberg truncates; our names are full)
+    once the SHORTER side clears the significant-length floor; below it, exact
+    equality only."""
+    if not a or not b:
+        return False
+    if len(min(a, b, key=len).replace(" ", "")) < MIN_BBG_NAME_CHARS:
+        return a == b
+    return a.startswith(b) or b.startswith(a)
+
+
+def is_bbg_company_subject(subject: str) -> bool:
+    """The CAPS company-name shape. The no-lowercase guard is deliberate: without
+    it, an ordinary newsletter subject ('Morning Brief: markets rally') matches
+    the pattern and would be dropped as an untracked company."""
+    m = _BBG_NAME_RE.match(subject or "")
+    return bool(m) and not any(c.islower() for c in m.group("name"))
+
+
 def is_bbg_stock_alert(subject: str) -> bool:
     """True for the Bloomberg per-stock subject shape (regardless of exchange)."""
     return _BBG_SUBJECT_RE.match(subject or "") is not None
@@ -437,6 +483,14 @@ def attribute_email(subject: str, body: str, secs: list[dict]):
         hits = [s for s in secs
                 if want in {str(s.get("symbol") or "").lower(), str(s.get("yahoo_symbol") or "").lower()}]
         return _resolve(hits, "bbg") or (None, None)
+    if is_bbg_company_subject(subject):
+        # tier 0b: Bloomberg CAPS company name -> our securities.name, both
+        # normalized. EXCLUSIVE like the ticker tier: the alert text ("Volume
+        # Since Open", "Target Px increased") is common English that collides
+        # with company names, which is exactly how LSEG once became LPRO.
+        want = normalize_company(_BBG_NAME_RE.match(subject).group("name"))
+        hits = [s for s in secs if _name_prefix_match(want, normalize_company(s.get("name")))]
+        return _resolve(hits, "bbgname") or (None, None)
     if is_bbg_stock_alert(subject):
         # UNMAPPED exchange code: no bare-ticker guess — 'AAPL CN' is a foreign
         # twin, not our AAPL, and a wrong attribution is worse than none. The
@@ -544,7 +598,7 @@ def collect() -> None:
 
         fetched = new_count = dup_count = tagged = 0
         attachments_saved = skipped_oversize = skipped_untracked_stock = bbg_unmapped_code = 0
-        by_tier = {"bbg": 0, "secnum": 0, "symbol": 0, "name": 0}
+        by_tier = {"bbg": 0, "bbgname": 0, "secnum": 0, "symbol": 0, "name": 0}
         for i, msg_id in enumerate(ids, 1):
             try:
                 log.info("EMAIL fetch %d/%d", i, len(ids))
@@ -583,6 +637,13 @@ def collect() -> None:
                     # suffix we haven't mapped. Keep it (NULL = macro), shout the code.
                     bbg_unmapped_code += 1
                     log.warning("BBG unmapped country code %s (subject: %r)", cc, subject[:60])
+                elif sec_id is None and is_bbg_company_subject(subject):
+                    # Same rule as the ticker shape: a per-company alert we can't
+                    # map is about a company we don't track — never macro.
+                    skipped_untracked_stock += 1
+                    log.info("  %r -> BBG company alert, untracked — skipped", subject[:60])
+                    imap.store(msg_id, "+FLAGS", "\\Seen")
+                    continue
                 if sec_id:
                     tagged += 1
                     by_tier[matched_by] += 1
@@ -628,11 +689,12 @@ def collect() -> None:
         # The summary that measures real-world attribution recall, per tier —
         # the collect_enrich pattern. Ambiguous cases appear as WARNINGs above.
         log.info(
-            "done: fetched=%d new=%d duplicate=%d attributed=%d (bbg=%d secnum=%d symbol=%d name=%d) none=%d "
+            "done: fetched=%d new=%d duplicate=%d attributed=%d (bbg=%d bbgname=%d secnum=%d symbol=%d name=%d) none=%d "
             "skipped_untracked_stock=%d bbg_unmapped_code=%d attachments_saved=%d skipped_oversize=%d "
             "retention_deleted=%d",
             fetched, new_count, dup_count, tagged,
-            by_tier["bbg"], by_tier["secnum"], by_tier["symbol"], by_tier["name"], fetched - tagged,
+            by_tier["bbg"], by_tier["bbgname"], by_tier["secnum"], by_tier["symbol"], by_tier["name"],
+            fetched - tagged,
             skipped_untracked_stock, bbg_unmapped_code, attachments_saved, skipped_oversize, retention_deleted,
         )
     finally:
