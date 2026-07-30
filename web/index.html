@@ -10,6 +10,17 @@
       href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
+    <!-- PWA: installable as "GOLD news" on Android/iOS home screens. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#0A1120" />
+    <!-- iOS ignores the manifest's icons and display mode — these are its path. -->
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <!-- black-translucent pairs with the viewport-fit=cover + safe-area padding
+         the app already applies, so content isn't hidden under the notch. -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="GOLD" />
     <title>GOLD — מעקב ניירות ערך</title>
   </head>
   <body>

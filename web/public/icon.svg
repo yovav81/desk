@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="GOLD news">
+  <!-- App icon MASTER. The PNGs in public/icons/ are rasterized from THIS file
+       (headless Chromium screenshot) — edit here, re-run the export, never hand-
+       edit a PNG. A future variant is a one-word swap of the second <text>.
+       Colors are the app palette verbatim: bg = theme.bg #0A1120, wordmark =
+       theme.acc #D4AF37 (gold), subtitle = theme.txt #E8EEF9. -->
+  <rect width="512" height="512" fill="#0A1120"/>
+  <g font-family="Heebo, 'Segoe UI', Arial, Helvetica, sans-serif" text-anchor="middle">
+    <text x="256" y="272" fill="#D4AF37" font-size="150" font-weight="700" letter-spacing="6">GOLD</text>
+    <text x="256" y="352" fill="#E8EEF9" font-size="72" font-weight="500" letter-spacing="10">news</text>
+  </g>
+</svg>
