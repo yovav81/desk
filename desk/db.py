@@ -57,6 +57,7 @@ securities = Table(
     Column("yahoo_symbol", String(32), nullable=True),  # override; default resolution in securities.py
     Column("maya_company_id", Integer, nullable=True),  # MAYA internal companyId; resolved+cached by desk/maya_ids.py
     Column("cik", Integer, nullable=True),  # SEC EDGAR CIK (US only); resolved+cached by desk/sec_ids.py
+    Column("asset_type_checked_at", DateTime(timezone=True), nullable=True),  # sql/009; NULL = never asked (collect_enrich)
 )
 
 watchlist = Table(

@@ -41,7 +41,8 @@ import argparse
 import logging
 import time
 
-from sqlalchemy import func, select, update
+import yfinance as yf
+from sqlalchemy import column, func, select, table, update
 
 from desk.db import get_engine, init_db, manual_prices, securities, watchlist
 from desk.onboarding import _yahoo_search, _yfinance_has_prices
@@ -205,6 +206,76 @@ def enrich(commit: bool = False) -> None:
     )
 
 
+# --- asset_type pass: asset_type shipped as 'stock' on EVERY row (never sourced)
+# — an ETF was indistinguishable from a stock. Unknown types store raw, no guess.
+QUOTE_TYPE_MAP = {"EQUITY": "stock", "ETF": "etf", "MUTUALFUND": "fund", "INDEX": "index"}
+
+
+def map_asset_type(quote_type: str) -> str:
+    return QUOTE_TYPE_MAP.get(quote_type.upper(), quote_type.lower())[:16]  # col is 16 chars
+
+
+def yahoo_quote_type(symbol: str) -> str | None:
+    """`fast_info` = the CHEAP read; `.info` pulls the whole quoteSummary for the
+    same string. None on any failure/blank -> caller leaves the row untouched."""
+    try:
+        return yf.Ticker(symbol).fast_info.quote_type or None
+    except Exception as exc:  # fail-soft: caller leaves the row untouched
+        log.warning("quoteType lookup failed for %s: %s", symbol, exc)
+        return None
+
+
+# sql/009's securities.asset_type_checked_at (timestamptz, nullable), which
+# db.py's Table (out of scope here) doesn't declare: a bare column for the WHERE,
+# and a minimal local handle for the UPDATE's SET — an unbound column key there
+# raises CompileError. The shared Table object is never mutated.
+CHECKED_AT = column("asset_type_checked_at")
+SEC_UPD = table("securities", column("sec_id"), column("asset_type"), column("asset_type_checked_at"))
+
+
+def asset_type_todo(engine) -> list[dict]:
+    """NEVER-CHECKED rows only. The marker makes 'confirmed a stock' distinct
+    from 'not yet asked', so this set drains MONOTONICALLY to empty instead of
+    re-fetching every equity forever; sec_id order makes runs deterministic."""
+    stmt = select(securities).where(CHECKED_AT.is_(None)).order_by(securities.c.sec_id)
+    with engine.connect() as conn:
+        return [dict(row._mapping) for row in conn.execute(stmt)]
+
+
+def resolve_asset_types(commit: bool = False) -> None:
+    engine = get_engine()
+    cand = asset_type_todo(engine)
+    fetchable = [c for c in cand if c["yahoo_symbol"]]
+    todo = fetchable[:MAX_PER_RUN]  # same per-run throttle as the ticker pass
+    checked = resolved = unchanged = errors = 0  # errors = raised OR blank; row untouched
+    for sec in todo:
+        checked += 1
+        quote_type = yahoo_quote_type(sec["yahoo_symbol"])
+        new = map_asset_type(str(quote_type)) if quote_type else None
+        if new is None:
+            errors += 1  # checked_at stays NULL -> this row is retried next run
+            time.sleep(REQUEST_DELAY)
+            continue
+        vals = {"asset_type_checked_at": func.now()}  # EVERY completed check stamps it
+        if new == sec["asset_type"]:
+            unchanged += 1
+        else:
+            resolved += 1
+            vals["asset_type"] = new
+            log.info("%s (%s): asset_type %s -> %s  [quoteType=%s]%s", sec["sec_id"], sec["name"],
+                     sec["asset_type"], new, quote_type, "" if commit else "  [would write]")
+        if commit:
+            with engine.begin() as conn:
+                conn.execute(update(SEC_UPD).where(SEC_UPD.c.sec_id == sec["sec_id"]).values(vals))
+        time.sleep(REQUEST_DELAY)
+
+    with engine.connect() as conn:  # backfill progress: 0 = done, nothing left to ask
+        remaining = conn.execute(select(func.count()).select_from(securities).where(CHECKED_AT.is_(None))).scalar()
+    log.info("ASSET_TYPE checked=%d resolved=%d unchanged=%d skipped_no_symbol=%d errors=%d remaining=%d%s",
+             checked, resolved, unchanged, len(cand) - len(fetchable), errors, remaining,
+             "" if commit else "  [DRY-RUN]")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="python -m desk.collect_enrich",
@@ -217,6 +288,9 @@ def main() -> None:
                       help="actually UPDATE securities.yahoo_symbol/price_source")
     args = parser.parse_args()
     enrich(commit=args.commit)
+    # Called here, not inside enrich(): enrich returns early once the TASE
+    # ticker backlog is empty, which is the steady state.
+    resolve_asset_types(commit=args.commit)
 
 
 if __name__ == "__main__":
