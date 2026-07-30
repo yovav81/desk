@@ -13,6 +13,11 @@ on:
     - cron: "3,8,13,18,23,28,33,38,43,48,53,58 * * * *"
   workflow_dispatch: {}
 
+# Least privilege — read-only token; this lane only checks out the repo and
+# reads MAYA/SEC. Actions are SHA-pinned (see collect.yml).
+permissions:
+  contents: read
+
 concurrency:
   group: desk-filings
   cancel-in-progress: false
@@ -25,9 +30,9 @@ jobs:
       DESK_DEFAULT_USER: ${{ secrets.DESK_DEFAULT_USER }}
       SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
           cache: pip
@@ -42,7 +47,7 @@ jobs:
       # unpinned in requirements.txt, so this key can go stale on a version
       # bump; that costs one re-download, nothing else.)
       - name: Cache Playwright Chromium
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
