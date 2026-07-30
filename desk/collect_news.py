@@ -284,13 +284,15 @@ def collect() -> None:
             continue
 
         # Truthful vocabulary (the maya-style "new=" ambiguity burned us twice):
-        # inserted= is the LITERAL insert count — ON CONFLICT DO NOTHING reports
-        # rowcount 0 on a duplicate — and duplicate=/skipped_stale= name the
-        # other two outcomes explicitly.
+        # inserted= is the LITERAL rowcount of what the DB WROTE. MEASURED
+        # 2026-07-30: `result.rowcount` on ON CONFLICT DO NOTHING is NOT
+        # reliable here — collect_macro logged inserted=31 across two runs that
+        # wrote zero rows. RETURNING is: a swallowed insert returns NO row. Any
+        # counter built on rowcount is reporting intent, not writes.
         # GDELT relevance filtering already happened at the batch stage
         # (attribute_gdelt_batch); per-security offtopic stays 0 by design.
         group = groups.setdefault(sec["sec_id"], [])
-        inserted = stale = similar = offtopic = 0
+        inserted = stale = similar = offtopic = attempted = 0
         with engine.begin() as conn:
             for it in items:
                 if is_stale(it["published_at"], now):
@@ -300,6 +302,7 @@ def collect() -> None:
                 if any(is_similar(toks, t) for t in group):
                     similar += 1
                     continue
+                attempted += 1
                 stmt = insert_ignore(engine, news, ["url"]).values(
                     sec_id=sec["sec_id"],
                     source=it.get("source", src),
@@ -307,13 +310,13 @@ def collect() -> None:
                     url=it["url"],
                     published_at=it["published_at"],
                     summary=None,
-                )
-                result = conn.execute(stmt)
-                if result.rowcount:
+                ).returning(news.c.id)
+                if conn.execute(stmt).first() is not None:
                     inserted += 1
                     group.append(toks)
 
-        dup = len(items) - inserted - stale - similar - offtopic
+        # Reached the insert and was swallowed by the url guard — not derived.
+        dup = attempted - inserted
         total_read += len(items)
         total_inserted += inserted
         total_dup += dup
