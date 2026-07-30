@@ -361,7 +361,11 @@ _BBG_SUBJECT_RE = re.compile(r"^\s*(\S+)\s+([A-Z]{2})\s+Equity\b")
 # unattributed. Table-driven: add a line when a new code shows up. An UNMAPPED
 # code simply falls through (no candidate is built) — deliberately no bare-ticker
 # fallback, since "AAPL CN" is a different company from our AAPL.
-BBG_SUFFIX = {"US": "", "FP": ".PA", "TT": ".TW", "SW": ".SW", "JT": ".T",
+# US VENUE CODES all mean the same bare ticker: US=composite, UN=NYSE,
+# UW=NASDAQ, UQ/UR=NASDAQ tiers, UA=NYSE American, UP=NYSE Arca. Bloomberg
+# picks whichever venue the alert came from, so ICE UN / TW UW are our ICE / TW.
+BBG_SUFFIX = {"US": "", "UN": "", "UW": "", "UQ": "", "UR": "", "UA": "", "UP": "",
+              "FP": ".PA", "TT": ".TW", "SW": ".SW", "JT": ".T",
               "JP": ".T", "KP": ".KS", "GY": ".DE", "LN": ".L"}
 
 
@@ -417,7 +421,11 @@ def attribute_email(subject: str, body: str, secs: list[dict]):
                 if want in {str(s.get("symbol") or "").lower(), str(s.get("yahoo_symbol") or "").lower()}]
         return _resolve(hits, "bbg") or (None, None)
     if is_bbg_stock_alert(subject):
-        return None, None  # per-stock shape, unmapped exchange — never macro
+        # UNMAPPED exchange code: no bare-ticker guess — 'AAPL CN' is a foreign
+        # twin, not our AAPL, and a wrong attribution is worse than none. The
+        # email is KEPT as NULL (collect warns + counts) and the null-sweep will
+        # claim it for free once the code is added to BBG_SUFFIX.
+        return None, None
 
     scopes = [_tokens(subject), _tokens(body)]
 
@@ -518,7 +526,7 @@ def collect() -> None:
         log.info("EMAIL search n=%d", len(ids))
 
         fetched = new_count = dup_count = tagged = 0
-        attachments_saved = skipped_oversize = skipped_untracked_stock = 0
+        attachments_saved = skipped_oversize = skipped_untracked_stock = bbg_unmapped_code = 0
         by_tier = {"bbg": 0, "secnum": 0, "symbol": 0, "name": 0}
         for i, msg_id in enumerate(ids, 1):
             try:
@@ -547,10 +555,17 @@ def collect() -> None:
                 # dropped instead of polluting the macro tab. Marked \\Seen: a
                 # deliberate skip is a completed outcome, not a failure to retry.
                 if sec_id is None and is_bbg_stock_alert(subject):
-                    skipped_untracked_stock += 1
-                    log.info("  %r -> BBG per-stock alert, untracked — skipped", subject[:60])
-                    imap.store(msg_id, "+FLAGS", "\\Seen")
-                    continue
+                    cc = _BBG_SUBJECT_RE.match(subject).group(2)
+                    if cc in BBG_SUFFIX:
+                        skipped_untracked_stock += 1
+                        log.info("  %r -> BBG per-stock alert, untracked — skipped", subject[:60])
+                        imap.store(msg_id, "+FLAGS", "\\Seen")
+                        continue
+                    # DROPPING MAIL REQUIRES CERTAINTY, and an unknown exchange
+                    # code is not certainty — the security may be tracked under a
+                    # suffix we haven't mapped. Keep it (NULL = macro), shout the code.
+                    bbg_unmapped_code += 1
+                    log.warning("BBG unmapped country code %s (subject: %r)", cc, subject[:60])
                 if sec_id:
                     tagged += 1
                     by_tier[matched_by] += 1
@@ -597,10 +612,11 @@ def collect() -> None:
         # the collect_enrich pattern. Ambiguous cases appear as WARNINGs above.
         log.info(
             "done: fetched=%d new=%d duplicate=%d attributed=%d (bbg=%d secnum=%d symbol=%d name=%d) none=%d "
-            "skipped_untracked_stock=%d attachments_saved=%d skipped_oversize=%d retention_deleted=%d",
+            "skipped_untracked_stock=%d bbg_unmapped_code=%d attachments_saved=%d skipped_oversize=%d "
+            "retention_deleted=%d",
             fetched, new_count, dup_count, tagged,
             by_tier["bbg"], by_tier["secnum"], by_tier["symbol"], by_tier["name"], fetched - tagged,
-            skipped_untracked_stock, attachments_saved, skipped_oversize, retention_deleted,
+            skipped_untracked_stock, bbg_unmapped_code, attachments_saved, skipped_oversize, retention_deleted,
         )
     finally:
         try:
