@@ -114,7 +114,7 @@ def collect() -> None:
             log.warning("macro feed failed for %s (%s): %s", source, url, e)
             continue
 
-        inserted = stale = similar = 0
+        inserted = stale = similar = attempted = 0
         with engine.begin() as conn:
             for it in items:
                 if is_stale(it["published_at"], now):
@@ -124,6 +124,7 @@ def collect() -> None:
                 if any(is_similar(toks, t) for t in known):
                     similar += 1
                     continue
+                attempted += 1
                 stmt = insert_ignore(engine, news, ["url"]).values(
                     sec_id=None,
                     source=source,
@@ -132,12 +133,19 @@ def collect() -> None:
                     published_at=it["published_at"],
                     summary=None,
                     category="macro",
-                )
-                if conn.execute(stmt).rowcount:
+                ).returning(news.c.id)
+                # inserted = rows the DB actually RETURNED. ON CONFLICT DO NOTHING
+                # returns ZERO rows for a swallowed insert, so this cannot report
+                # intent — rowcount claimed inserted=31 on a run that wrote no
+                # rows at all (measured, two runs 8 min apart). Never count
+                # candidates again: `inserted` is a rowcount or it is a lie.
+                if conn.execute(stmt).first() is not None:
                     inserted += 1
                     known.append(toks)
 
-        dup = len(items) - inserted - stale - similar
+        # Everything that reached the insert and was swallowed by the url guard.
+        # Non-zero on any repeat run — that is the signal duplicate=0 was hiding.
+        dup = attempted - inserted
         total_read += len(items)
         total_inserted += inserted
         total_dup += dup
