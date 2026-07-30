@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from './supabaseClient';
 import { theme as t } from './theme';
 import Watchlist from './Watchlist';
@@ -492,6 +492,37 @@ function Dashboard({ session, isAdmin = false }) {
   // security missing its name never renders blank. Every displayed feed item
   // with a sec_id is a watchlist security, so this map covers them.
   const secLabels = Object.fromEntries(wl.rows.map((r) => [r.sec_id, r.name || r.symbol || r.sec_id]));
+  // sec_id -> asset_type, from the SAME watchlist rows (useWatchlist already
+  // selects asset_type) — the macro tab needs it to tell an ETF/fund item from
+  // a stock item. No extra query: a security outside these rows stays unknown,
+  // which News treats as NOT macro.
+  // ALL securities' asset types — ONE query per session (not per refresh, never
+  // per item). The watchlist-derived map is not enough: the ~50 ETFs live in
+  // `securities` with NO watchlist row anywhere, so their feed items resolved to
+  // undefined and fell out of every tab. Fail-soft: on error the map stays empty
+  // and macro shows only the general items, exactly as before.
+  const [assetTypes, setAssetTypes] = useState({});
+  useEffect(() => {
+    let cancelled = false;
+    supabase
+      .from('securities')
+      .select('sec_id, asset_type')
+      .then(({ data }) => {
+        if (!cancelled) setAssetTypes(Object.fromEntries((data || []).map((r) => [r.sec_id, r.asset_type])));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // useMemo so the identity is stable: News lists it as a memo dependency, and a
+  // fresh object every render would defeat that memo. Watchlist rows layer ON
+  // TOP so a security added mid-session classifies without refetching the map;
+  // until the map lands it is {} = unresolvable = NOT macro (no flicker).
+  const secAssetTypes = useMemo(
+    () => ({ ...assetTypes, ...Object.fromEntries(wl.rows.map((r) => [r.sec_id, r.asset_type])) }),
+    [assetTypes, wl.rows],
+  );
 
   async function onLogout() {
     await supabase.auth.signOut();
@@ -604,6 +635,7 @@ function Dashboard({ session, isAdmin = false }) {
             mobile
             watchSecIds={watchSecIds}
             secLabels={secLabels}
+            secAssetTypes={secAssetTypes}
             watchReady={wl.status === 'ready'}
             refreshTick={refreshTick}
           />
@@ -674,7 +706,13 @@ function Dashboard({ session, isAdmin = false }) {
         </div>
         <SplitDivider containerRef={splitRef} pct={wlPct} onResize={setWlPct} />
         <div style={{ flex: 1, display: 'flex', minWidth: 0, minHeight: 0 }}>
-          <News watchSecIds={watchSecIds} secLabels={secLabels} watchReady={wl.status === 'ready'} refreshTick={refreshTick} />
+          <News
+            watchSecIds={watchSecIds}
+            secLabels={secLabels}
+            secAssetTypes={secAssetTypes}
+            watchReady={wl.status === 'ready'}
+            refreshTick={refreshTick}
+          />
         </div>
       </div>
     </div>

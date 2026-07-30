@@ -15,7 +15,7 @@ const TABS = [
   { key: 'all', label: 'הכל' },
 ];
 
-export default function News({ watchSecIds = [], secLabels = {}, watchReady = true, refreshTick, mobile = false }) {
+export default function News({ watchSecIds = [], secLabels = {}, secAssetTypes = {}, watchReady = true, refreshTick, mobile = false }) {
   const { items, status, error, fetchedAt, refresh } = useNews(refreshTick);
   const [tab, setTab] = useState('all'); // default: הכל
 
@@ -49,8 +49,17 @@ export default function News({ watchSecIds = [], secLabels = {}, watchReady = tr
     const mine = items.filter((it) =>
       it.type === 'web' ? it.category === 'stock' && inWatch(it) : inWatch(it)
     );
+    // Macro = the general items (no sec_id, as before) PLUS anything attributed
+    // to an ETF/fund: a basket item is market reading, not company news. A
+    // STOCK-attributed item stays out — it belongs to that security's own feed.
+    // An UNRESOLVABLE sec_id (security not among the loaded watchlist rows) is
+    // treated as NOT macro: never leak an unknown stock item into the macro tab.
+    const isBasket = (secId) => {
+      const at = secAssetTypes[secId];
+      return at === 'etf' || at === 'fund';
+    };
     const macro = items.filter((it) =>
-      (it.type === 'web' && it.category === 'macro') || (it.type === 'email' && it.sec_id == null)
+      it.sec_id != null ? isBasket(it.sec_id) : it.type === 'web' ? it.category === 'macro' : it.type === 'email'
     );
 
     let list;
@@ -61,7 +70,7 @@ export default function News({ watchSecIds = [], secLabels = {}, watchReady = tr
       list = [...mine, ...macro].filter((it) => (seen.has(it.key) ? false : seen.add(it.key)));
     }
     return [...list].sort((a, b) => tsValue(b.ts) - tsValue(a.ts));
-  }, [items, watchSecIds, tab]);
+  }, [items, watchSecIds, secAssetTypes, tab]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }}>
