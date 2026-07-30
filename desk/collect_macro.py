@@ -16,6 +16,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
+from urllib.parse import quote
 
 from sqlalchemy import select
 
@@ -36,9 +37,27 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) DeskCollector/0.1"
 # Ynet's economy RSS. Both Hebrew UTF-8; pubDate is RFC822 with an explicit
 # offset, parsed tz-aware by fetch_feed. Add more feeds by extending this list.
 GLOBES_RSS = "https://www.globes.co.il/webservice/rss/rssfeeder.asmx/FeederNode?iID={iid}"
+# Google News SEARCH feeds (same host/shape as collect_news.rss_url_for, which
+# is per-security). Deliberately QUERY feeds, not the BUSINESS topic channel:
+# that topic is dominated by single-company stories, which is per-security news,
+# not macro. The locale triple (hl/gl/ceid) picks the language + edition.
+GNEWS_RSS = "https://news.google.com/rss/search?q={q}&hl={hl}&gl={gl}&ceid={ceid}"
+GNEWS_WORLD_Q = '"central bank" OR "interest rates" OR inflation OR "global economy"'
+# Calcalist + TheMarker have no usable direct RSS (WAF 403 — Phase 0), so they
+# are reached via site-restricted search. Headlines + links only, as everywhere
+# here: their article bodies are paywalled and we never store bodies anyway.
+# Terms are finance-SPECIFIC on purpose: the site restriction bounds the outlet,
+# not the section, and broad words (כלכלה/שווקים) let Calcalist's sports desk
+# through (measured — a Mondial story ranked 3rd).
+GNEWS_IL_Q = ("(site:calcalist.co.il OR site:themarker.com) "
+              '(בורסה OR ריבית OR אינפלציה OR "בנק ישראל" OR מניות OR "שוק ההון")')
 MACRO_FEEDS = [
     ("globes_home", GLOBES_RSS.format(iid=2)),
     ("ynet_economy", "https://www.ynet.co.il/Integration/StoryRss6.xml"),
+    ("google_world_macro",
+     GNEWS_RSS.format(q=quote(GNEWS_WORLD_Q, safe=""), hl="en-US", gl="US", ceid="US:en")),
+    ("google_il_macro",
+     GNEWS_RSS.format(q=quote(GNEWS_IL_Q, safe=""), hl="he", gl="IL", ceid="IL:he")),
 ]
 # World-macro lane (Phase 12C): GDELT keyless DOC API, English press, 1 day.
 # Rides the same loop as the RSS feeds (same gates/log); url=None routes the
