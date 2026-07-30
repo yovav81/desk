@@ -97,6 +97,7 @@ emails = Table(
     Column("body_text", Text, nullable=True),
     Column("matched_by", String(16), nullable=True),  # sender | subject | body
     Column("message_id", String(998), nullable=False, unique=True),
+    Column("sweep_checked_at", DateTime(timezone=True), nullable=True),  # sql/010; NULL = never swept
 )
 Index("ix_emails_received_at", emails.c.received_at)
 

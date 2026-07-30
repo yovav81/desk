@@ -26,7 +26,7 @@ from urllib.parse import quote
 
 import requests
 from bs4 import BeautifulSoup
-from sqlalchemy import bindparam, select, text, update
+from sqlalchemy import bindparam, func, select, text, update
 
 from desk.db import emails, get_engine, init_db, insert_ignore, securities
 
@@ -561,6 +561,12 @@ def attribute_email(subject: str, body: str, secs: list[dict]):
 
 
 SWEEP_BATCH = 200
+# sql/010's emails.sweep_checked_at marks rows the sweep has ALREADY examined.
+# Without it the window never advances: a row that fails attribution keeps its
+# id and re-enters the same newest-200 window forever, so older mail is never
+# read (measured: 1,273 NULL rows, only the top 200 ever scanned).
+# When a NEW attribution tier ships, re-open the whole backlog with:
+SWEEP_RESET_HINT = "update emails set sweep_checked_at = null where sec_id is null;"
 
 
 def reattribute_nulls(engine, secs: list[dict]) -> int:
@@ -569,7 +575,7 @@ def reattribute_nulls(engine, secs: list[dict]) -> int:
     non-NULL sec_id — the SELECT filters on NULL and the UPDATE re-checks it."""
     stmt = (
         select(emails.c.id, emails.c.subject, emails.c.body_text)
-        .where(emails.c.sec_id.is_(None))
+        .where(emails.c.sec_id.is_(None), emails.c.sweep_checked_at.is_(None))
         .order_by(emails.c.id.desc())
         .limit(SWEEP_BATCH)
     )
@@ -578,17 +584,27 @@ def reattribute_nulls(engine, secs: list[dict]) -> int:
     filled = 0
     for eid, subject, body in rows:
         sec_id, matched_by = attribute_email(subject or "", body or "", secs)
-        if sec_id is None:
-            continue
+        # EVERY examined row is marked, attributed or not — that is what makes
+        # the window advance. sec_id/matched_by are only set on a hit, and the
+        # sec_id IS NULL re-check keeps a non-NULL attribution untouchable.
+        values = {"sweep_checked_at": func.now()}
+        if sec_id is not None:
+            values.update(sec_id=sec_id, matched_by=matched_by)
         with engine.begin() as conn:
             result = conn.execute(
                 update(emails)
                 .where(emails.c.id == eid, emails.c.sec_id.is_(None))
-                .values(sec_id=sec_id, matched_by=matched_by)
+                .values(**values)
             )
-        filled += result.rowcount or 0
+        filled += (result.rowcount or 0) if sec_id is not None else 0
     if rows:
-        log.info("null-sweep: scanned=%d re-attributed=%d", len(rows), filled)
+        with engine.connect() as conn:
+            remaining = conn.execute(
+                select(func.count()).select_from(emails)
+                .where(emails.c.sec_id.is_(None), emails.c.sweep_checked_at.is_(None))
+            ).scalar()
+        log.info("null-sweep: scanned=%d re-attributed=%d sweep_remaining=%d",
+                 len(rows), filled, remaining)
     return filled
 
 
