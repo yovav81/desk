@@ -364,9 +364,26 @@ _BBG_SUBJECT_RE = re.compile(r"^\s*(\S+)\s+([A-Z]{2})\s+Equity\b")
 # US VENUE CODES all mean the same bare ticker: US=composite, UN=NYSE,
 # UW=NASDAQ, UQ/UR=NASDAQ tiers, UA=NYSE American, UP=NYSE Arca. Bloomberg
 # picks whichever venue the alert came from, so ICE UN / TW UW are our ICE / TW.
-BBG_SUFFIX = {"US": "", "UN": "", "UW": "", "UQ": "", "UR": "", "UA": "", "UP": "",
-              "FP": ".PA", "TT": ".TW", "SW": ".SW", "JT": ".T",
-              "JP": ".T", "KP": ".KS", "GY": ".DE", "LN": ".L"}
+BBG_SUFFIX = {
+    "US": "", "UN": "", "UW": "", "UQ": "", "UR": "", "UA": "", "UP": "",
+    "LN": ".L",    # London
+    "FP": ".PA",   # Paris
+    "GY": ".DE",   # Xetra / Germany
+    "IM": ".MI",   # Milan
+    "SM": ".MC",   # Madrid
+    "NA": ".AS",   # Amsterdam
+    "BB": ".BR",   # Brussels
+    "SS": ".ST",   # Stockholm
+    "SW": ".SW",   # SIX Swiss
+    "JT": ".T",    # Tokyo
+    "JP": ".T",    # Tokyo (alt code)
+    "HK": ".HK",   # Hong Kong
+    "TT": ".TW",   # Taiwan
+    "KP": ".KS",   # Korea (KOSPI)
+    "AU": ".AX",   # Australia (ASX)
+    "CN": ".TO",   # Canada (Toronto)
+    "SJ": ".JO",   # Johannesburg
+}
 
 
 def is_bbg_stock_alert(subject: str) -> bool:
