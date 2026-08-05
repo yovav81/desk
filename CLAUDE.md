@@ -92,10 +92,26 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   items with **no `sec_id`** (macro news + unassigned emails) **PLUS anything
   attributed to an ETF/fund** — a basket item is market reading, not company
   news, while a stock-attributed item belongs to that security's own feed
-  (Phase 16E). `asset_type` comes from a **session-level `securities` fetch in
+  (Phase 16E) — **MINUS any email flagged `is_single_stock`** (Phase 21, next
+  bullet). The live predicate:
+  `sec_id != null ? isBasket(sec_id) : type==='web' ? category==='macro' :
+  type==='email' && !is_single_stock` — the flag is consulted **only** on the
+  `sec_id == null` branch, so ETF-attributed items are unaffected.
+  `asset_type` comes from a **session-level `securities` fetch in
   App.jsx** (mount-once, never per item) because the 50 ETFs are on no
   watchlist; an unresolvable `sec_id` counts as NOT macro, so an unknown stock
   item can never leak in. **הכל** = the union.
+- **`emails.is_single_stock` — classification no longer depends on attribution
+  (Phase 21, sql/011).** A Bloomberg per-stock subject is about **ONE security
+  by definition**; whether we resolved *which* one is a separate question and
+  says nothing about whether the mail is macro. It isn't. So `collect_email`
+  sets the boolean TRUE for **either** Bloomberg shape (ticker+country-code, or
+  `<COMPANY NAME>: <action>`) regardless of attribution success, in **both the
+  insert path and the null-sweep** (`is_single_stock_subject()`), and the macro
+  tab excludes it. This is what keeps an **unmapped** venue code — kept as
+  `sec_id` NULL on purpose, since dropping mail requires certainty — out of
+  macro: 417 such rows in 9 codes were cluttering it, 826 legacy NULL rows were
+  flagged by a one-off UPDATE (verification query: 0 unflagged Bloomberg rows).
 - Data queries avoid PostgREST nested embeds (FK relationships aren't detected
   on the raw-created tables — embeds return null joins); use flat `.in()`
   queries merged in JS instead (see `useWatchlist.js`).
@@ -343,10 +359,15 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   increased") is common English that collides with company names — that is how
   `LSEG LN` once became LPRO (Open Lending).
   1. **`bbg`** — `"<TICKER> <CC> Equity …"`. `BBG_SUFFIX` maps Bloomberg's own
-     venue codes to our symbols: US/UN/UW/UQ/UR/UA/UP → bare, FP `.PA`,
-     TT `.TW`, SW `.SW`, JT/JP `.T`, KP `.KS`, GY `.DE`, LN `.L`, IM `.MI`,
-     SM `.MC`, NA `.AS`, BB `.BR`, SS `.ST`, HK `.HK`, AU `.AX`, CN `.TO`,
-     SJ `.JO`. Mapped + tracked → attribute; mapped + untracked → **SKIP the
+     venue codes to our symbols: US/UN/UW/UQ/UR/UA/UP/**UF**/**PL** → bare,
+     FP `.PA`, TT `.TW`, SW `.SW`, JT/JP `.T`, KP `.KS`, GY `.DE`, LN `.L`,
+     IM `.MI`, SM `.MC`, NA `.AS`, BB `.BR`, SS `.ST`, HK `.HK`, AU `.AX`,
+     CN `.TO`, SJ `.JO`, and the nine added in Phase 21 from measured prod
+     traffic: **DC** `.CO` (Copenhagen), **KS** `.SR` (Saudi), **IT** `.MI`
+     (Milan MTA — IM maps there too, two Bloomberg codes onto one suffix),
+     **GA** `.AT` (Athens), **LI** `.L` (LSE International), **SP** `.SA`
+     (São Paulo), **MV** `.MC` (Madrid), plus UF/PL above (US venues).
+     Mapped + tracked → attribute; mapped + untracked → **SKIP the
      mail** (`skipped_untracked_stock`) — a per-stock alert is never macro;
      **UNMAPPED code → KEEP with sec_id NULL + WARNING + `bbg_unmapped_code`**.
      No bare-ticker fallback: `AAPL CN` is a foreign twin, and dropping mail
@@ -360,6 +381,19 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
      APPLEBEES can't claim APPLE. Requires an **all-caps, multi-word** name —
      without that guard `Morning Brief:` (a newsletter) and `AAPL: earnings`
      (a ticker subject) would be swallowed and deleted. No match → skip.
+     Two prod-only defects, fixed in 21-FIX: the anchor was `[A-Z]`, so a
+     **digit-leading** name (`3I GROUP PLC:`, `3M CO:`) never matched the shape
+     at all and kept surfacing in macro — it is `[A-Z0-9]` now; and a
+     **forward/reply prefix is uppercase text before a colon**, so `FW` was read
+     as the company name and `FW: KBW Europe Financials Fix …` (a market-indices
+     review Yovav reads) was flagged single-stock and VANISHED from macro.
+     `FW/FWD/RE/AW/TR/SV/VS/ENC` (repeats included) are now **stripped before**
+     the pattern test — so `FW: SONY GROUP CORP: Files 4` still classifies — and
+     the captured name is re-checked against that list as a second defence.
+     `bbg_company_name()` is the ONE extraction site; never re-match the raw
+     subject. Older copies of that same KBW mail had also been mis-attributed to
+     **FIX** (Comfort Systems) by the symbol tier; Phase 19's
+     `WORD_LIKE_SYMBOLS` blocks it (`SYMBOL_BLOCKED sym=FIX` in the run log).
   Then the original ladder: security number as a standalone token >
   **whole-word** ticker (len≥2 — **single-letter symbols are structurally
   excluded**: Citigroup's 'C' substring-matched the 'c' in every ".com" sender
@@ -704,6 +738,21 @@ technical item is CLOSED. What holds now:
   kept their ids, so 1,073 older rows were unreachable — including mail a newer
   tier would have matched. Any "retry the failures" loop needs a marker column
   (`sweep_checked_at`, `asset_type_checked_at`) or it starves its own tail.
+- **A new DB column is not live until the client select includes it — the flag
+  existed, the UI ignored it.** `is_single_stock` was written correctly by the
+  collector and applied correctly by the macro predicate, but the `emails`
+  `.select()` in `useNews.js` still listed the old columns, so the field arrived
+  `undefined`, `!undefined` was true, and **every flagged item stayed in macro**
+  — a silent no-op with nothing to debug on either end. Column, writer, client
+  select, and reader ship in the SAME commit. (Same family as the RLS-policy
+  trap: the data is there, the client just can't see it.)
+- **A pattern's anchor is an assumption about the data.** `^[A-Z]` in the
+  Bloomberg company-subject regex silently excluded every digit-leading name
+  (3I GROUP, 3M), and treating "uppercase text before a colon" as a company name
+  swallowed the forward marker `FW:` — deleting a review Yovav actually reads
+  from his macro tab. Both defects were invisible offline and surfaced only in
+  prod: test a classifier against **real subject lines**, including the ones it
+  is supposed to leave alone.
 - **"Already built" in docs can mean a mockup.** The mobile cards "already
   built" claim referred to design_reference markup, not code — the third
   overturned documented claim in one week (Sano tickers, the enrichment TODO,

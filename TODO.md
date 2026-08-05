@@ -578,6 +578,50 @@
       `update emails set sweep_checked_at = null where sec_id is null`
       (SWEEP_RESET_HINT — never auto-run).
 
+## Phase 20: docs sync — DONE (2026-07-30)
+- [x] 20 — CLAUDE.md + TODO.md brought up to Phase 19 (security, attribution,
+      macro, PWA). Docs-only; no code touched.
+
+## Phase 21: Bloomberg-shaped mail is never macro — DONE (2026-08-05)
+- [x] 21 — **classification no longer depends on attribution.** A Bloomberg
+      per-stock subject is about ONE security BY DEFINITION; whether we
+      resolved which one says nothing about whether the mail is macro. It
+      isn't. New column `emails.is_single_stock` (boolean not null default
+      false; sql/011 + rollback), set TRUE by `is_single_stock_subject()` for
+      EITHER Bloomberg shape (ticker+country-code, or `<COMPANY NAME>:
+      <action>`) in BOTH the insert path and the null-sweep. News.jsx macro
+      predicate is now `sec_id != null ? isBasket(sec_id) : type==='web' ?
+      category==='macro' : type==='email' && !is_single_stock` — the flag is
+      read ONLY on the `sec_id == null` branch, so ETF/fund-attributed items
+      are unaffected. Fixes 417 unattributed per-stock alerts (9 unmapped
+      codes) cluttering macro.
+- [x] 21 — `BBG_SUFFIX` + 9 codes measured in prod: DC `.CO` (Copenhagen),
+      KS `.SR` (Saudi), UF `''` and PL `''` (US venues), IT `.MI` (Milan MTA —
+      IM maps there too), GA `.AT` (Athens), LI `.L` (LSE Intl), SP `.SA`
+      (São Paulo), MV `.MC` (Madrid).
+- [x] 21 — data: 826 existing NULL emails flagged by a one-off UPDATE;
+      verification query returned **0 unflagged Bloomberg rows**.
+- [x] 21 — **the select was the bug.** `is_single_stock` was initially MISSING
+      from the `emails` `.select()` in useNews.js, so it arrived `undefined`
+      client-side and every flagged item went straight back into macro. New
+      lesson recorded: a column is not live until the client select has it.
+- [x] 21-FIX — two pattern defects found only in prod:
+      (1) the company-subject regex anchored on `[A-Z]`, so digit-leading names
+      (`3I GROUP PLC: Files …`, `3M CO: Files 4`) never matched the shape and
+      kept showing in macro — anchor is `[A-Z0-9]` now;
+      (2) forward prefixes were read as company names —
+      `FW: KBW Europe Financials Fix Wednesday August 5th` was flagged
+      is_single_stock=TRUE and VANISHED from macro, though it is a forwarded
+      market-indices review Yovav wants. FW/FWD/RE/AW/TR/SV/VS/ENC are now
+      stripped BEFORE the pattern test (so `FW: SONY GROUP CORP: Files 4` still
+      classifies) and the captured name is re-checked against that list as a
+      second defence. Older copies of that KBW mail had ALSO been mis-attributed
+      to FIX (Comfort Systems) via the symbol tier — Phase 19's
+      WORD_LIKE_SYMBOLS blocks it (`SYMBOL_BLOCKED sym=FIX` seen in the log).
+- [x] 21-FIX — data repair: forwarded reviews released (is_single_stock=false,
+      sec_id + matched_by cleared, guarded so `FW: <COMPANY>: …` was NOT
+      released); digit-leading company subjects flagged.
+
 ## Before public launch (security, not blocking the invite-only group)
 - [ ] **15F — password reset flow** (Supabase Site/Redirect URLs must be set,
       or link emails point at the localhost:3000 default).
