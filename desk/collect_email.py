@@ -418,7 +418,17 @@ BBG_SUFFIX = {
 # "<COMPANY NAME>: Target Px increased to 224 AUD ... by Macquarie". Bloomberg
 # writes the name in CAPS and TRUNCATES it to ~28 chars ("TAIWAN SEMICONDUCTOR
 # MANUFAC"), so matching is prefix-based, not exact.
-_BBG_NAME_RE = re.compile(r"^(?P<name>[A-Z][^:]{2,60}):\s+\S")
+# A leading DIGIT is legal in a company name (3I GROUP PLC, 3M CO) — anchoring
+# on [A-Z] alone silently dropped those out of the shape (measured, 21-FIX).
+_BBG_NAME_RE = re.compile(r"^(?P<name>[A-Z0-9][^:]{2,60}):\s+\S")
+
+# Forward/reply markers are uppercase text before a colon, so the shape above
+# reads "FW" as the company name — that is how a forwarded market review
+# ("FW: KBW Europe Financials Fix ...") was flagged single-stock and vanished
+# from macro. Stripped BEFORE matching so "FW: SONY GROUP CORP: Files 4" still
+# classifies on its real subject; also rejected as a captured name, belt-and-braces.
+_MAIL_PREFIXES = frozenset({"FW", "FWD", "RE", "AW", "TR", "SV", "VS", "ENC"})
+_MAIL_PREFIX_RE = re.compile(r"^\s*(?:(?:%s)\s*:\s*)+" % "|".join(sorted(_MAIL_PREFIXES)), re.I)
 
 # Dropped from the TAIL of both sides before comparing — they carry no identity
 # ("Japan Exchange Group, Inc." and "JAPAN EXCHANGE GROUP INC" must agree).
@@ -452,18 +462,23 @@ def _name_prefix_match(a: str, b: str) -> bool:
     return a.startswith(b) or b.startswith(a)
 
 
-def is_bbg_company_subject(subject: str) -> bool:
-    """The CAPS company-name shape. The no-lowercase guard is deliberate: without
-    it, an ordinary newsletter subject ('Morning Brief: markets rally') matches
-    the pattern and would be dropped as an untracked company."""
-    m = _BBG_NAME_RE.match(subject or "")
+def bbg_company_name(subject: str) -> str | None:
+    """The CAPS company name from a Bloomberg company subject, else None. The
+    no-lowercase guard is deliberate: without it, an ordinary newsletter subject
+    ('Morning Brief: markets rally') matches and would be dropped as untracked."""
+    m = _BBG_NAME_RE.match(_MAIL_PREFIX_RE.sub("", subject or ""))
     if not m or any(c.islower() for c in m.group("name")):
-        return False
+        return None
+    name = m.group("name").strip()
     # Multi-word only: Bloomberg always carries the legal suffix ("CAMTEK LTD",
     # "SONY GROUP CORP"). A single all-caps token before a colon is a TICKER
     # subject ("AAPL: earnings beat") — that belongs to the symbol tier, and
     # treating it as an unmatched company name would DELETE the mail.
-    return " " in m.group("name").strip()
+    return None if " " not in name or name.upper() in _MAIL_PREFIXES else name
+
+
+def is_bbg_company_subject(subject: str) -> bool:
+    return bbg_company_name(subject) is not None
 
 
 def is_bbg_stock_alert(subject: str) -> bool:
@@ -531,7 +546,7 @@ def attribute_email(subject: str, body: str, secs: list[dict]):
         # normalized. EXCLUSIVE like the ticker tier: the alert text ("Volume
         # Since Open", "Target Px increased") is common English that collides
         # with company names, which is exactly how LSEG once became LPRO.
-        want = normalize_company(_BBG_NAME_RE.match(subject).group("name"))
+        want = normalize_company(bbg_company_name(subject))
         hits = [s for s in secs if _name_prefix_match(want, normalize_company(s.get("name")))]
         return _resolve(hits, "bbgname") or (None, None)
     if is_bbg_stock_alert(subject):
