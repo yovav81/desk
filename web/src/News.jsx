@@ -58,8 +58,13 @@ export default function News({ watchSecIds = [], secLabels = {}, secAssetTypes =
       const at = secAssetTypes[secId];
       return at === 'etf' || at === 'fund';
     };
+    // An unattributed email whose SUBJECT is a Bloomberg per-stock alert is about
+    // ONE security by definition (sql/011) — we just couldn't map its exchange
+    // code. Unresolved is not macro, so the flag keeps it out (Phase 21).
     const macro = items.filter((it) =>
-      it.sec_id != null ? isBasket(it.sec_id) : it.type === 'web' ? it.category === 'macro' : it.type === 'email'
+      it.sec_id != null
+        ? isBasket(it.sec_id)
+        : it.type === 'web' ? it.category === 'macro' : it.type === 'email' && !it.is_single_stock
     );
 
     let list;

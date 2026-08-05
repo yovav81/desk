@@ -43,6 +43,7 @@ const mapEmail = (e) => ({
   source: e.sender,
   url: null,
   sec_id: e.sec_id,
+  is_single_stock: e.is_single_stock, // sql/011: Bloomberg per-stock subject -> never macro
   ts: e.received_at,
 });
 const mapFiling = (f) => ({
@@ -80,7 +81,7 @@ export function useNews(refreshTick) {
           .limit(FEED_LIMIT),
         supabase
           .from('emails')
-          .select('id, sec_id, sender, subject, received_at')
+          .select('id, sec_id, sender, subject, received_at, is_single_stock')
           .order('received_at', { ascending: false, nullsFirst: false })
           .limit(FEED_LIMIT),
         supabase
@@ -153,7 +154,7 @@ export function useSecurityFeed(secId) {
           .limit(FEED_LIMIT),
         supabase
           .from('emails')
-          .select('id, sec_id, sender, subject, received_at')
+          .select('id, sec_id, sender, subject, received_at, is_single_stock')
           .eq('sec_id', secId)
           .order('received_at', { ascending: false, nullsFirst: false })
           .limit(FEED_LIMIT),

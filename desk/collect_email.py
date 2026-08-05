@@ -401,6 +401,16 @@ BBG_SUFFIX = {
     "AU": ".AX",   # Australia (ASX)
     "CN": ".TO",   # Canada (Toronto)
     "SJ": ".JO",   # Johannesburg
+    # Phase 21: the 9 codes measured on the 417 unattributed per-stock alerts.
+    "DC": ".CO",   # Copenhagen
+    "KS": ".SR",   # Saudi (Tadawul)
+    "UF": "",      # US venue -> bare ticker
+    "IT": ".MI",   # Milan (MTA) — same venue suffix as IM, different Bloomberg code
+    "GA": ".AT",   # Athens
+    "PL": "",      # US venue -> bare ticker
+    "LI": ".L",    # London international board
+    "SP": ".SA",   # Sao Paulo (B3)
+    "MV": ".MC",   # Madrid (Mercado Continuo)
 }
 
 
@@ -459,6 +469,14 @@ def is_bbg_company_subject(subject: str) -> bool:
 def is_bbg_stock_alert(subject: str) -> bool:
     """True for the Bloomberg per-stock subject shape (regardless of exchange)."""
     return _BBG_SUBJECT_RE.match(subject or "") is not None
+
+
+def is_single_stock_subject(subject: str) -> bool:
+    """Either Bloomberg per-stock shape (ticker+code, or CAPS company name). Such
+    a subject is about ONE security BY DEFINITION — whether we resolved which one
+    is a separate question. sql/011's emails.is_single_stock records that fact so
+    an unmapped-code row (kept as NULL by design) never lands in the macro tab."""
+    return is_bbg_stock_alert(subject) or is_bbg_company_subject(subject)
 
 
 def bbg_candidate(subject: str) -> str | None:
@@ -587,7 +605,8 @@ def reattribute_nulls(engine, secs: list[dict]) -> int:
         # EVERY examined row is marked, attributed or not — that is what makes
         # the window advance. sec_id/matched_by are only set on a hit, and the
         # sec_id IS NULL re-check keeps a non-NULL attribution untouchable.
-        values = {"sweep_checked_at": func.now()}
+        values = {"sweep_checked_at": func.now(),
+                  "is_single_stock": is_single_stock_subject(subject or "")}
         if sec_id is not None:
             values.update(sec_id=sec_id, matched_by=matched_by)
         with engine.begin() as conn:
@@ -712,6 +731,7 @@ def collect() -> None:
                     body_text=body_text,
                     matched_by=matched_by,
                     message_id=message_id,
+                    is_single_stock=is_single_stock_subject(subject),
                 )
                 with engine.begin() as conn:
                     result = conn.execute(stmt)

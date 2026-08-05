@@ -98,6 +98,7 @@ emails = Table(
     Column("matched_by", String(16), nullable=True),  # sender | subject | body
     Column("message_id", String(998), nullable=False, unique=True),
     Column("sweep_checked_at", DateTime(timezone=True), nullable=True),  # sql/010; NULL = never swept
+    Column("is_single_stock", Boolean, nullable=False, server_default=text("false")),  # sql/011; Bloomberg per-stock subject -> never macro
 )
 Index("ix_emails_received_at", emails.c.received_at)
 
