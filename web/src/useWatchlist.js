@@ -29,13 +29,16 @@ async function resolveUserId(user) {
     .maybeSingle();
   if (!insErr && created) return created.id;
 
-  // Lost a race with another tab (unique auth_uid) — the row exists now.
-  const { data: retry } = await supabase
-    .from('users')
-    .select('id')
-    .eq('auth_uid', user.id)
-    .maybeSingle();
-  if (retry) return retry.id;
+  // The insert can lose EITHER unique key: auth_uid (another tab won the race)
+  // or username (a row already carries this email). Re-select on BOTH before
+  // giving up — an existing users row must not kill the dashboard load. RLS
+  // scopes both reads to the caller's OWN row (sql/005: auth_uid = auth.uid()),
+  // so neither can adopt someone else's; username is skipped with no email.
+  const keys = [['auth_uid', user.id], ...(user.email ? [['username', user.email]] : [])];
+  for (const [col, val] of keys) {
+    const { data: found } = await supabase.from('users').select('id').eq(col, val).maybeSingle();
+    if (found) return found.id;
+  }
   throw insErr || new Error('could not resolve user');
 }
 

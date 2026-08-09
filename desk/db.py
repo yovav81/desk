@@ -294,10 +294,15 @@ def init_db(engine=None) -> None:
     engine = engine or get_engine()
     _migrate(engine)
     metadata.create_all(engine, checkfirst=True)
-    default_user = os.environ.get("DESK_DEFAULT_USER", "owner")
-    with engine.begin() as conn:
-        stmt = insert_ignore(engine, users, ["username"]).values(username=default_user)
-        conn.execute(stmt)
+    # An UNSET GitHub secret still DEFINES the env var as empty, so the "owner"
+    # default never fires — that is how a username='', auth_uid NULL row reached
+    # prod and collided under users_username_key (26). Empty/whitespace = ABSENT.
+    default_user = (os.environ.get("DESK_DEFAULT_USER") or "").strip() or "owner"
+    # Defence in depth: a blank username is never inserted, however it resolved.
+    if default_user:
+        with engine.begin() as conn:
+            stmt = insert_ignore(engine, users, ["username"]).values(username=default_user)
+            conn.execute(stmt)
 
 
 if __name__ == "__main__":
