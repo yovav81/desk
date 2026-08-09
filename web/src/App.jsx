@@ -15,23 +15,41 @@ import { useIsMobile } from './useIsMobile';
 // Styling mirrors design_reference/ (Ocean theme, gold accent), our own clean
 // implementation.
 
+// PASSWORD RECOVERY (Phase 23) — detected at the AUTH layer, not by path (no
+// router). Supabase's implicit flow returns a "#...type=recovery" hash, which
+// the SDK consumes and reports as PASSWORD_RECOVERY. The hash is read here too,
+// at module load, because the SDK strips it during its async init — possibly
+// before our listener attaches; either path arms the reset form. An expired
+// link returns "#error=..." with NO session, surfaced on the login screen.
+const HASH = typeof window !== 'undefined' ? window.location.hash : '';
+const RECOVERY_IN_URL = /[#&]type=recovery/.test(HASH);
+const LINK_ERROR_IN_URL = /[#&]error(_code|_description)?=/.test(HASH);
+// The app ROOT, deliberately not '/reset': no router and no SPA rewrite
+// (web/DEPLOY.md), so '/reset' would 404 on Vercel before this code runs.
+const RESET_REDIRECT = typeof window !== 'undefined' ? `${window.location.origin}/` : '';
+
 export default function App() {
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [recovery, setRecovery] = useState(RECOVERY_IN_URL);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
       setLoading(false);
     });
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
+      if (event === 'PASSWORD_RECOVERY') setRecovery(true);
       setSession(s);
     });
     return () => sub.subscription.unsubscribe();
   }, []);
 
   if (loading) return <Splash />;
-  if (!session) return <Login />;
+  // The recovery session is a real session, so this must come BEFORE the gate —
+  // otherwise the link would drop the user straight into the dashboard.
+  if (recovery) return <Login initialMode="reset" onResetDone={() => setRecovery(false)} />;
+  if (!session) return <Login linkError={LINK_ERROR_IN_URL} />;
   // THREE-WAY GATE: no session → Login; session but unapproved → Pending;
   // approved → Dashboard. The gate is a wrapper so Dashboard (and its
   // useWatchlist/useNews) never mounts until approval is confirmed.
@@ -192,24 +210,42 @@ function hebrewAuthError(error, mode) {
   const m = (error?.message || '').toLowerCase();
   if (m.includes('already registered') || m.includes('already been registered'))
     return 'האימייל כבר רשום — נסו להתחבר';
+  // Both MUST precede the generic password check below, which would otherwise
+  // answer "at least 6 characters" to a same-password or dead-link error.
+  if (m.includes('same password') || m.includes('should be different'))
+    return 'הסיסמה החדשה חייבת להיות שונה מהקודמת';
+  if (mode === 'reset' && (m.includes('session') || m.includes('expired') || m.includes('token')))
+    return 'הקישור פג תוקף או אינו תקין — בקשו קישור חדש';
   if (m.includes('password')) return 'הסיסמה חייבת להכיל לפחות 6 תווים';
   if (m.includes('email') && (m.includes('invalid') || m.includes('valid')))
     return 'כתובת אימייל לא תקינה';
   if (m.includes('invalid login credentials')) return 'התחברות נכשלה — בדקו אימייל וסיסמה';
   if (m.includes('email not confirmed')) return 'האימייל טרם אומת — בדקו את תיבת הדואר ואשרו';
+  if (mode === 'reset') return 'עדכון הסיסמה נכשל — נסו שוב';
   return mode === 'signup' ? 'ההרשמה נכשלה — נסו שוב' : 'ההתחברות נכשלה — נסו שוב';
 }
 
 const MIN_PASSWORD = 6; // Supabase default minimum
 
-function Login() {
-  const [mode, setMode] = useState('login'); // login | signup
+// One screen, five states — card, fields, error/notice lines and submit button
+// are shared, so the reset flow can't drift from the login styling. [idle,busy]
+const TITLES = { login: 'התחברות', signup: 'הרשמה', forgot: 'איפוס סיסמה', reset: 'בחר סיסמה חדשה', done: 'הסיסמה עודכנה' };
+const LABELS = { login: ['כניסה', 'מתחבר…'], signup: ['הרשמה', 'נרשם…'], forgot: ['שלח קישור לאיפוס', 'שולח…'],
+  reset: ['עדכן סיסמה', 'מעדכן…'], done: ['המשך', ''] };
+
+function Login({ initialMode = 'login', onResetDone, linkError = false }) {
+  const [mode, setMode] = useState(initialMode); // login | signup | forgot | reset | done
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [err, setErr] = useState('');
+  const [password2, setPassword2] = useState(''); // reset mode only
+  const [err, setErr] = useState(linkError ? 'הקישור פג תוקף או אינו תקין — בקשו קישור חדש' : '');
   const [notice, setNotice] = useState(''); // success message (signup confirmation)
   const [busy, setBusy] = useState(false);
   const isSignup = mode === 'signup';
+  const isReset = mode === 'reset';
+  const isDone = mode === 'done';
+  const showEmail = mode === 'login' || isSignup || mode === 'forgot';
+  const showPassword = mode === 'login' || isSignup || isReset;
 
   function switchMode(next) {
     setMode(next);
@@ -222,6 +258,41 @@ function Login() {
     setErr('');
     setNotice('');
     const mail = email.trim();
+    if (isReset) {
+      if (password.length < MIN_PASSWORD) {
+        setErr(`הסיסמה חייבת להכיל לפחות ${MIN_PASSWORD} תווים`);
+        return;
+      }
+      if (password !== password2) {
+        setErr('הסיסמאות אינן תואמות');
+        return;
+      }
+      setBusy(true);
+      const { error } = await supabase.auth.updateUser({ password });
+      setBusy(false);
+      if (error) {
+        setErr(hebrewAuthError(error, 'reset'));
+        return;
+      }
+      setMode('done');
+      setNotice('הסיסמה עודכנה בהצלחה. אתם מחוברים.');
+      return;
+    }
+    if (mode === 'forgot') {
+      if (!mail) {
+        setErr('יש להזין אימייל');
+        return;
+      }
+      setBusy(true);
+      // Anti-enumeration: the SAME neutral confirmation whether or not the
+      // address has an account — an error here would reveal existence. Same
+      // stance as the signup path's obfuscated success.
+      await supabase.auth.resetPasswordForEmail(mail, { redirectTo: RESET_REDIRECT });
+      setBusy(false);
+      setMode('login');
+      setNotice('אם הכתובת רשומה אצלנו, נשלח אליה קישור לאיפוס סיסמה.');
+      return;
+    }
     if (!mail || !password) {
       setErr('יש להזין אימייל וסיסמה');
       return;
@@ -283,41 +354,61 @@ function Login() {
       >
         <Brand />
 
-        <div style={{ fontSize: 15, fontWeight: 600, color: t.txt }}>
-          {isSignup ? 'הרשמה' : 'התחברות'}
-        </div>
+        <div style={{ fontSize: 15, fontWeight: 600, color: t.txt }}>{TITLES[mode]}</div>
 
-        <Field
-          label="אימייל"
-          type="email"
-          value={email}
-          onChange={(e) => {
-            setEmail(e.target.value);
-            setErr('');
-          }}
-          autoComplete="email"
-        />
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {mode === 'forgot' && (
+          <div style={{ fontSize: 13, color: t.mut, lineHeight: 1.6 }}>הזינו את כתובת האימייל שלכם ונשלח אליה קישור לבחירת סיסמה חדשה.</div>
+        )}
+
+        {showEmail && (
           <Field
-            label="סיסמה"
-            type="password"
-            value={password}
+            label="אימייל"
+            type="email"
+            value={email}
             onChange={(e) => {
-              setPassword(e.target.value);
+              setEmail(e.target.value);
               setErr('');
             }}
-            autoComplete={isSignup ? 'new-password' : 'current-password'}
+            autoComplete="email"
           />
-          {isSignup && (
-            <div style={{ fontSize: 11.5, color: t.mut }}>לפחות {MIN_PASSWORD} תווים</div>
-          )}
-        </div>
+        )}
+        {showPassword && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <Field
+              label={isReset ? 'סיסמה חדשה' : 'סיסמה'}
+              type="password"
+              value={password}
+              onChange={(e) => {
+                setPassword(e.target.value);
+                setErr('');
+              }}
+              autoComplete={isSignup || isReset ? 'new-password' : 'current-password'}
+            />
+            {(isSignup || isReset) && (
+              <div style={{ fontSize: 11.5, color: t.mut }}>לפחות {MIN_PASSWORD} תווים</div>
+            )}
+          </div>
+        )}
+        {isReset && (
+          <Field
+            label="אימות סיסמה"
+            type="password"
+            value={password2}
+            onChange={(e) => {
+              setPassword2(e.target.value);
+              setErr('');
+            }}
+            autoComplete="new-password"
+          />
+        )}
 
         {err && <div style={{ fontSize: 13, color: t.red }}>{err}</div>}
         {notice && <div style={{ fontSize: 13, color: t.acc, lineHeight: 1.5 }}>{notice}</div>}
 
         <button
-          type="submit"
+          // 'done' hands the user back to App, where ApprovalGate takes over.
+          type={isDone ? 'button' : 'submit'}
+          onClick={isDone ? onResetDone : undefined}
           disabled={busy}
           style={{
             background: t.acc,
@@ -332,20 +423,36 @@ function Login() {
             opacity: busy ? 0.7 : 1,
           }}
         >
-          {busy ? (isSignup ? 'נרשם…' : 'מתחבר…') : isSignup ? 'הרשמה' : 'כניסה'}
+          {LABELS[mode][busy ? 1 : 0]}
         </button>
 
-        <div style={{ fontSize: 13, color: t.mut, textAlign: 'center' }}>
-          {isSignup ? 'יש לך כבר חשבון? ' : 'אין לך חשבון? '}
-          <span
-            onClick={() => switchMode(isSignup ? 'login' : 'signup')}
-            style={{ color: t.acc, cursor: 'pointer', fontWeight: 600 }}
-          >
-            {isSignup ? 'התחברות' : 'הרשמה'}
-          </span>
-        </div>
+        {!isDone && (
+          <div style={{ fontSize: 13, color: t.mut, textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {(mode === 'login' || isSignup) && (
+              <div>
+                {isSignup ? 'יש לך כבר חשבון? ' : 'אין לך חשבון? '}
+                <TextLink onClick={() => switchMode(isSignup ? 'login' : 'signup')}>
+                  {isSignup ? 'התחברות' : 'הרשמה'}
+                </TextLink>
+              </div>
+            )}
+            {mode === 'login' && <TextLink onClick={() => switchMode('forgot')}>שכחתי סיסמה</TextLink>}
+            {mode === 'forgot' && <TextLink onClick={() => switchMode('login')}>חזרה להתחברות</TextLink>}
+            {/* Escape hatch for an unusable recovery session — with no session,
+                App falls through to the login screen. */}
+            {isReset && <TextLink onClick={onResetDone}>ביטול</TextLink>}
+          </div>
+        )}
       </form>
     </div>
+  );
+}
+
+function TextLink({ onClick, children }) {
+  return (
+    <span onClick={onClick} style={{ color: t.acc, cursor: 'pointer', fontWeight: 600 }}>
+      {children}
+    </span>
   );
 }
 
