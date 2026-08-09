@@ -2,11 +2,15 @@ import { useEffect, useState } from 'react';
 import { theme as t } from './theme';
 
 // PHASE 25 — install banner. The PWA (17B) installs fine; people never found
-// the path. Four states, decided ONLY by what the platform can actually do:
-// 'android' needs the browser's own beforeinstallprompt (the only proof a
-// prompt exists), 'ios' has no such event so it gets instructions, an in-app
-// webview cannot install at all and is told to leave, anything else renders
-// nothing. Dismissal is React state — per-session by design; NO localStorage/
+// the path. Five states, decided by what the platform can actually do:
+// 'android' has a live beforeinstallprompt and gets a one-tap button;
+// 'androidManual' is the SAME platform WITHOUT that event — MEASURED on the
+// user's phone (deferred=false, everything else clean): Chrome suppresses the
+// event once the app was ever installed on that device, so gating the banner on
+// it hid the app from a whole class of users; it gets ⋮-menu instructions
+// instead. 'ios' never fires the event at all, an in-app webview cannot install
+// and is told to leave, anything else renders nothing.
+// Dismissal is React state — per-session by design; NO localStorage/
 // sessionStorage anywhere (project rule), so it returns on a later visit.
 // Mounted ONLY by the mobile tree, as the shell's LAST flex child: it takes its
 // own row instead of overlaying, so the feed's last item is never covered.
@@ -21,16 +25,11 @@ const isStandalone = () =>
 
 const TEXT = {
   android: 'התקינו את GOLD למסך הבית',
+  androidManual: "התקינו את GOLD: תפריט ⋮ ואז 'הוספה למסך הבית'",
   ios: "התקינו את GOLD: כפתור השיתוף ⬆️ ואז 'הוסף למסך הבית'",
   inapp: 'לפתיחה כאפליקציה — פתחו את הקישור בדפדפן',
 };
 const BTN = { border: 'none', fontFamily: 'Heebo, sans-serif', cursor: 'pointer', flexShrink: 0 };
-// TEMPORARY — remove after diagnosis (Phase 25-DEBUG). ?debug=1 forces the bar
-// to render and swaps the message for the raw decision inputs; the phone has no
-// usable console. Read once at module load, so without it NOTHING below changes.
-const DEBUG = /[?&]debug=1/.test(window.location.search);
-const DBG_STYLE = { direction: 'ltr', textAlign: 'left', whiteSpace: 'pre-wrap',
-  overflowWrap: 'anywhere', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5 };
 
 export default function InstallBanner({ dismissed, onDismiss }) {
   const [deferred, setDeferred] = useState(null);
@@ -50,17 +49,16 @@ export default function InstallBanner({ dismissed, onDismiss }) {
     };
   }, []);
 
-  const mode = IN_APP.test(ua()) ? 'inapp' : deferred ? 'android' : isIOSSafari() ? 'ios' : null;
-
-  // TEMPORARY — remove after diagnosis (Phase 25-DEBUG).
-  const dbg = DEBUG
-    ? `installed=${installed}  dismissed=${dismissed}\ninApp=${IN_APP.test(ua())}  deferred=${Boolean(deferred)}  iOS=${isIOS()}\ntouch=${navigator.maxTouchPoints}  width=${window.innerWidth}\nua=${ua().slice(0, 70)}`
-    : '';
-  useEffect(() => {
-    if (dbg) console.log(dbg);
-  }, [dbg]);
-
-  if (!DEBUG && (dismissed || installed || !mode || !navigator.maxTouchPoints)) return null;
+  const mode = IN_APP.test(ua())
+    ? 'inapp'
+    : deferred
+      ? 'android'
+      : isIOSSafari()
+        ? 'ios'
+        : /Android/.test(ua())
+          ? 'androidManual'
+          : null;
+  if (dismissed || installed || !mode || !navigator.maxTouchPoints) return null;
 
   async function install() {
     const e = deferred;
@@ -76,9 +74,7 @@ export default function InstallBanner({ dismissed, onDismiss }) {
         fontSize: 13, color: t.txt, lineHeight: 1.4,
       }}
     >
-      <span style={{ flex: 1, minWidth: 0, ...(DEBUG ? DBG_STYLE : null) }}>
-        {DEBUG ? dbg : TEXT[mode]}
-      </span>
+      <span style={{ flex: 1, minWidth: 0 }}>{TEXT[mode]}</span>
       {mode === 'android' && (
         <button
           onClick={install}
