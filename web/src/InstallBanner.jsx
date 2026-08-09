@@ -25,6 +25,12 @@ const TEXT = {
   inapp: 'לפתיחה כאפליקציה — פתחו את הקישור בדפדפן',
 };
 const BTN = { border: 'none', fontFamily: 'Heebo, sans-serif', cursor: 'pointer', flexShrink: 0 };
+// TEMPORARY — remove after diagnosis (Phase 25-DEBUG). ?debug=1 forces the bar
+// to render and swaps the message for the raw decision inputs; the phone has no
+// usable console. Read once at module load, so without it NOTHING below changes.
+const DEBUG = /[?&]debug=1/.test(window.location.search);
+const DBG_STYLE = { direction: 'ltr', textAlign: 'left', whiteSpace: 'pre-wrap',
+  overflowWrap: 'anywhere', fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5 };
 
 export default function InstallBanner({ dismissed, onDismiss }) {
   const [deferred, setDeferred] = useState(null);
@@ -45,7 +51,16 @@ export default function InstallBanner({ dismissed, onDismiss }) {
   }, []);
 
   const mode = IN_APP.test(ua()) ? 'inapp' : deferred ? 'android' : isIOSSafari() ? 'ios' : null;
-  if (dismissed || installed || !mode || !navigator.maxTouchPoints) return null;
+
+  // TEMPORARY — remove after diagnosis (Phase 25-DEBUG).
+  const dbg = DEBUG
+    ? `installed=${installed}  dismissed=${dismissed}\ninApp=${IN_APP.test(ua())}  deferred=${Boolean(deferred)}  iOS=${isIOS()}\ntouch=${navigator.maxTouchPoints}  width=${window.innerWidth}\nua=${ua().slice(0, 70)}`
+    : '';
+  useEffect(() => {
+    if (dbg) console.log(dbg);
+  }, [dbg]);
+
+  if (!DEBUG && (dismissed || installed || !mode || !navigator.maxTouchPoints)) return null;
 
   async function install() {
     const e = deferred;
@@ -61,7 +76,9 @@ export default function InstallBanner({ dismissed, onDismiss }) {
         fontSize: 13, color: t.txt, lineHeight: 1.4,
       }}
     >
-      <span style={{ flex: 1, minWidth: 0 }}>{TEXT[mode]}</span>
+      <span style={{ flex: 1, minWidth: 0, ...(DEBUG ? DBG_STYLE : null) }}>
+        {DEBUG ? dbg : TEXT[mode]}
+      </span>
       {mode === 'android' && (
         <button
           onClick={install}
