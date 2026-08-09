@@ -6,6 +6,7 @@ import News from './News';
 import Detail from './Detail';
 import { useWatchlist } from './useWatchlist';
 import { useIsMobile } from './useIsMobile';
+import InstallBanner from './InstallBanner';
 
 // STEP 5b: login + two-panel dashboard — watchlist table (right, with search +
 // add/remove) and the unified news/email/filings feed (left) with three filter
@@ -576,6 +577,10 @@ function Dashboard({ session, isAdmin = false }) {
   // at the RETURN below, so the desktop tree stays byte-identical to today.
   const isMobile = useIsMobile();
   const [mobileTab, setMobileTab] = useState('watch');
+  // Install-banner dismissal lives HERE, not inside the banner: Dashboard
+  // survives tab flips and the detail page, so ✕ stays dismissed for the
+  // session. State only — localStorage is banned by project rule.
+  const [installDismissed, setInstallDismissed] = useState(false);
 
   // Auto-refresh: refetch when the tab regains visibility, plus a slow interval
   // as a backstop for a tab left open. Gated on visibilityState so a hidden tab
@@ -747,6 +752,11 @@ function Dashboard({ session, isAdmin = false }) {
             refreshTick={refreshTick}
           />
         </div>
+
+        {/* Last flex child = pinned to the bottom of the shell, above the
+            safe-area padding. It takes its own row rather than overlaying, so
+            the feed's last item is never covered. */}
+        <InstallBanner dismissed={installDismissed} onDismiss={() => setInstallDismissed(true)} />
       </div>
     );
   }
