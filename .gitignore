@@ -14,3 +14,5 @@ env_backup.txt
 
 research/
 design_reference/
+
+sql/005_signup_approval*.sql
