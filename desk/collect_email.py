@@ -5,9 +5,8 @@ confidence ladder (security number > whole-word ticker > distinctive name
 tokens; ambiguous/none -> sec_id NULL = macro — skip, don't fabricate). A
 NULL-only sweep each run re-attributes old emails when securities are added
 later; a stored non-NULL sec_id is never rewritten. No summarization. Never
-deletes or moves mail. Messages are marked \\Seen only
-after they have been successfully parsed and inserted (or found to already
-exist), so a failure mid-run leaves a message UNSEEN for retry next time.
+deletes or moves mail. Every message a run EXAMINES (kept, skipped, failed)
+is marked \\Seen so the queue advances; triage is newest-first, headers-only (Phase 27).
 
 Required env: GMAIL_USER, GMAIL_APP_PASSWORD. If either is missing, this
 exits cleanly (no exception) with a log message — meant to be a safe no-op
@@ -19,9 +18,10 @@ import imaplib
 import logging
 import os
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
-from email.utils import parsedate_to_datetime
+from email.utils import parseaddr, parsedate_to_datetime
 from urllib.parse import quote
 
 import requests
@@ -34,6 +34,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("collect_email")
 
 IMAP_HOST = "imap.gmail.com"
+
+# Phase 27: ~90% of the inbox is Bloomberg per-stock alerts (~533/day), mostly
+# dropped downstream — drain newest-first, never full-fetch old Bloomberg. Tunable.
+BBG_MAX_AGE_DAYS = 2      # older Bloomberg mail is marked \Seen unread
+EMAIL_MAX_PER_RUN = 300   # messages needing per-message work, per run
+HEADER_CHUNK = 200        # ids per batched header fetch / \Seen store
 
 # --------------------------------------------------------------------------- #
 # Attachments (Phase 8 step 5). Files go to a PRIVATE Supabase Storage bucket  #
@@ -248,10 +254,26 @@ def decode_mime_header(raw: str | None) -> str:
     out = []
     for text, enc in parts:
         if isinstance(text, bytes):
-            out.append(text.decode(enc or "utf-8", errors="replace"))
+            out.append(_decode_bytes(text, enc))
         else:
             out.append(text)
     return "".join(out)
+
+
+def _decode_bytes(data: bytes, charset: str | None) -> str:
+    """Unknown charset (e.g. legacy 'iso-8859-8-i') -> iso-8859-8 (Hebrew), then
+    latin-1/replace as the last resort. Never raises."""
+    try:
+        return data.decode(charset or "utf-8", errors="replace")
+    except LookupError:
+        pass
+    for fallback in ("iso-8859-8", "latin-1"):
+        try:
+            out = data.decode(fallback, errors="replace")
+        except LookupError:
+            continue
+        log.warning("unknown encoding %r — decoded as %s", charset, fallback)
+        return out
 
 
 def extract_body_text(msg: email.message.Message) -> str:
@@ -262,13 +284,9 @@ def extract_body_text(msg: email.message.Message) -> str:
             if part.get_content_disposition() == "attachment":
                 continue
             if ctype == "text/plain" and plain is None:
-                plain = part.get_payload(decode=True)
-                plain_charset = part.get_content_charset() or "utf-8"
-                plain = plain.decode(plain_charset, errors="replace")
+                plain = _decode_bytes(part.get_payload(decode=True), part.get_content_charset())
             elif ctype == "text/html" and html is None:
-                html = part.get_payload(decode=True)
-                html_charset = part.get_content_charset() or "utf-8"
-                html = html.decode(html_charset, errors="replace")
+                html = _decode_bytes(part.get_payload(decode=True), part.get_content_charset())
         if plain:
             return plain
         if html:
@@ -278,8 +296,7 @@ def extract_body_text(msg: email.message.Message) -> str:
         payload = msg.get_payload(decode=True)
         if payload is None:
             return ""
-        charset = msg.get_content_charset() or "utf-8"
-        text = payload.decode(charset, errors="replace")
+        text = _decode_bytes(payload, msg.get_content_charset())
         if msg.get_content_type() == "text/html":
             return BeautifulSoup(text, "html.parser").get_text(" ", strip=True)
         return text
@@ -642,6 +659,53 @@ def reattribute_nulls(engine, secs: list[dict]) -> int:
     return filled
 
 
+_NO_HDR = (None, "", "")  # (epoch, sender, subject) when headers couldn't be read
+
+
+def fetch_headers(imap, ids: list[bytes]) -> dict[bytes, tuple]:
+    """seq -> (epoch, sender, subject), header-only. Date header (not INTERNALDATE):
+    the same timestamp the row stores as received_at; FROM/SUBJECT ride along."""
+    out = {}
+    for start in range(0, len(ids), HEADER_CHUNK):
+        chunk = ids[start:start + HEADER_CHUNK]
+        log.info("EMAIL headers %d/%d", start + len(chunk), len(ids))
+        try:
+            status, data = imap.fetch(b",".join(chunk).decode(), "(BODY.PEEK[HEADER.FIELDS (DATE FROM SUBJECT)])")
+        except Exception as e:
+            log.warning("header fetch failed (%s) — chunk falls back to full fetch", e)
+            continue
+        for item in data if status == "OK" else []:
+            if not isinstance(item, tuple):
+                continue
+            h = email.message_from_bytes(item[1])
+            try:
+                ts = parsedate_to_datetime(h.get("Date")).timestamp()
+            except (TypeError, ValueError):
+                ts = None
+            out[item[0].split()[0]] = (ts, decode_mime_header(h.get("From")), decode_mime_header(h.get("Subject")))
+    return out
+
+
+def is_bloomberg_sender(sender: str) -> bool:
+    domain = parseaddr(sender)[1].lower().rpartition("@")[2]
+    return domain == "bloomberg.net" or domain.endswith(".bloomberg.net")
+
+
+def is_untracked_bbg(subject: str, sec_id) -> bool:
+    """Per-stock Bloomberg alert with no tracked security (droppable). An UNMAPPED
+    exchange code is not droppable — dropping mail requires certainty."""
+    m = _BBG_SUBJECT_RE.match(subject or "")
+    return sec_id is None and (m.group(2) in BBG_SUFFIX if m else is_bbg_company_subject(subject))
+
+
+def mark_seen(imap, ids: list[bytes]) -> None:
+    for start in range(0, len(ids), HEADER_CHUNK):
+        try:
+            imap.store(",".join(i.decode() for i in ids[start:start + HEADER_CHUNK]), "+FLAGS", "\\Seen")
+        except Exception as e:
+            log.warning("mark \\Seen failed: %s", e)
+
+
 def collect() -> None:
     gmail_user = os.environ.get("GMAIL_USER")
     gmail_pass = os.environ.get("GMAIL_APP_PASSWORD")
@@ -682,15 +746,41 @@ def collect() -> None:
         ids = data[0].split()
         log.info("EMAIL search n=%d", len(ids))
 
+        # Phase 27 triage — headers only, BEFORE any body fetch: sort newest
+        # first, bulk-\Seen old Bloomberg (no body, no classifier), cap the rest.
+        info = fetch_headers(imap, ids)
+        now = time.time()
+        ids.sort(key=lambda s: -(info.get(s, _NO_HDR)[0] or now))  # unknown date = fresh
+        cutoff = now - BBG_MAX_AGE_DAYS * 86400
+        queue, old_bbg = [], []
+        for s in ids:
+            ts, sender_h, _ = info.get(s, _NO_HDR)
+            old = ts is not None and ts < cutoff and is_bloomberg_sender(sender_h)
+            (old_bbg if old else queue).append(s)
+        mark_seen(imap, old_bbg)
+        log.info("EMAIL old-bloomberg-skipped count=%d", len(old_bbg))
+        remaining = max(0, len(queue) - EMAIL_MAX_PER_RUN)
+        queue = queue[:EMAIL_MAX_PER_RUN]
+
         fetched = new_count = dup_count = tagged = 0
         attachments_saved = skipped_oversize = skipped_untracked_stock = bbg_unmapped_code = 0
         by_tier = {"bbg": 0, "bbgname": 0, "secnum": 0, "symbol": 0, "name": 0}
-        for i, msg_id in enumerate(ids, 1):
+        for i, msg_id in enumerate(queue, 1):
             try:
-                log.info("EMAIL fetch %d/%d", i, len(ids))
+                # Header-only verdict: Bloomberg tiers read the SUBJECT alone, so
+                # an untracked alert is dropped here without fetching its body.
+                subj_h = info.get(msg_id, _NO_HDR)[2]
+                if is_single_stock_subject(subj_h) and is_untracked_bbg(
+                        subj_h, attribute_email(subj_h, "", secs)[0]):
+                    skipped_untracked_stock += 1
+                    log.info("EMAIL skip %d/%d %r -> BBG per-stock alert, untracked", i, len(queue), subj_h[:60])
+                    mark_seen(imap, [msg_id])
+                    continue
+                log.info("EMAIL fetch %d/%d", i, len(queue))
                 status, msg_data = imap.fetch(msg_id, "(BODY.PEEK[])")
                 if status != "OK" or not msg_data or msg_data[0] is None:
                     log.warning("fetch failed for id %s", msg_id)
+                    mark_seen(imap, [msg_id])
                     continue
                 raw = msg_data[0][1]
                 msg = email.message_from_bytes(raw)
@@ -711,6 +801,7 @@ def collect() -> None:
                 # is about a stock we don't track — it is NOT macro, so it is
                 # dropped instead of polluting the macro tab. Marked \\Seen: a
                 # deliberate skip is a completed outcome, not a failure to retry.
+                # (Normally caught header-only above; this is the safety net.)
                 if sec_id is None and is_bbg_stock_alert(subject):
                     cc = _BBG_SUBJECT_RE.match(subject).group(2)
                     if cc in BBG_SUFFIX:
@@ -771,7 +862,11 @@ def collect() -> None:
                 imap.store(msg_id, "+FLAGS", "\\Seen")
             except Exception as e:
                 log.warning("failed processing message id %s: %s", msg_id, e)
+                mark_seen(imap, [msg_id])  # examined = advanced, or the queue re-scans it forever
                 continue
+
+        if remaining:
+            log.info("EMAIL batch cap reached, remaining=%d", remaining)
 
         # The summary that measures real-world attribution recall, per tier —
         # the collect_enrich pattern. Ambiguous cases appear as WARNINGs above.
