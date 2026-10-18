@@ -631,6 +631,47 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   findings); seeded via manual browser export or (future) TASE DataHub's
   free "Securities (Basic)" API product.
 
+## Phases 23–27: password reset, SMTP, PWA install banner, users-row fix, email backlog — DONE (2026-08-09 … 2026-09-22)
+
+- **Phase 23 (`c5b5915`)** — password-reset flow in `App.jsx` (forgot link,
+  recovery-session detection, new-password form). Supabase Site/Redirect URLs
+  must be set or the link emails point at localhost.
+- **SMTP (config only, no commit, between Phases 23 and 25)** — custom Gmail SMTP in Supabase Auth
+  (the built-in sender's 2–4 mails/hour broke signup with a 429). Verification
+  mail lands in spam (no own domain → no SPF/DKIM); documented, accepted.
+- **Phase 25 (`c8952b6`) + 25-FIX (`bc7adcb`)** — `InstallBanner.jsx`: one-tap on
+  Android when `beforeinstallprompt` fires, manual instructions when it never
+  does, guided iOS steps, in-app-browser notice. Dismissal is session-only
+  React state (no localStorage). The temporary debug block (25-DEBUG `ff9e363`)
+  was removed.
+- **Phase 26 (`b41c6e4`)** — empty `DESK_DEFAULT_USER` (GitHub injects `""` for
+  an unset secret; `os.environ.get(k, default)` returns `""`) created a blank
+  `users` row → `users_username_key` duplicate. Fixed with
+  `(os.environ.get(...) or "").strip() or "owner"` in `db.py` and a resilient
+  users-row creation in `useWatchlist.js`.
+- **Phase 27 + 27-FIX (`64b58b9`, 2026-09-22)** — email-collector backlog
+  (1,661 Bloomberg mails stalled the 5-min step). `BBG_MAX_AGE_DAYS = 2`
+  (older Bloomberg mail is marked `\Seen`, no body fetch), `EMAIL_MAX_PER_RUN
+  = 300`, header-only fetch of DATE/FROM/SUBJECT in 200-id chunks, newest-first,
+  untracked Bloomberg judged on subject only. `_decode_bytes` tries declared
+  charset → iso-8859-8 → latin-1 (`errors='replace'`, one WARNING) so Hebrew
+  stays readable. **Tradeoffs:** every examined message is marked `\Seen`, so a
+  transient DB error permanently loses that mail; if the 5-min step timeout is
+  hit again, lower `EMAIL_MAX_PER_RUN`. Log lines to look for:
+  `EMAIL old-bloomberg-skipped count=N`, `EMAIL batch cap reached, remaining=N`.
+- **Ops incident 2026-10-18 (no code change)** — dispatch token invalid.
+  pg_cron → pg_net dispatches the workflows with the PAT in Vault secret
+  `gh_dispatch_token`. The PAT was regenerated in GitHub ~2 weeks earlier
+  (invalidating the old value) but Vault was not updated, so every dispatch got
+  `401 Bad credentials` while `cron.job_run_details` kept saying "succeeded".
+  Only GitHub's native best-effort cron ran (one run per ~5h) → Healthchecks
+  DOWN/UP alerts for desk-collect (5h18m) and desk-filings (55m). Fixed by
+  updating the Vault secret; `net._http_response` went back to 204.
+  **Check after ANY token change:**
+  `select created, status_code from net._http_response order by created desc limit 5;`
+  must show 204, and Actions must show `workflow_dispatch` runs every ~15 min.
+  Runs that are ALL "Scheduled" with multi-hour gaps = dispatch is dead.
+
 ## Security posture (Phase 15 — audit in research/SECURITY_AUDIT_FINDINGS.md)
 
 Audit result: CRITICAL 0, HIGH 2, MEDIUM 5, LOW 6 — every HIGH+MEDIUM
@@ -758,6 +799,13 @@ technical item is CLOSED. What holds now:
   overturned documented claim in one week (Sano tickers, the enrichment TODO,
   mobile). Verify docs against code before building on them.
 
+- **Regenerating a token invalidates the old value; the consumer keeps sending
+  it.** The dispatch PAT was regenerated but Vault still held the old string, so
+  for ~2 weeks pg_net got 401 while pg_cron reported "succeeded" and GitHub's
+  native cron kept the pipeline half-alive (a run every ~5h, all green). A
+  rotation is two edits — the issuer and every consumer — and is verified by the
+  consumer's real response (`net._http_response`), not by the scheduler's status.
+
 ## Secrets
 
 Read from environment only, never hardcoded: `DESK_DB_URL`,
@@ -767,7 +815,9 @@ Read from environment only, never hardcoded: `DESK_DB_URL`,
 `SUPABASE_SERVICE_ROLE_KEY` (**bypasses RLS — GitHub Actions Secrets ONLY,
 never in Vault, never in web/, never logged; errors name the variable, never
 the value**). Documented in `.env.example` / `README.md`. In CI these are
-GitHub Actions secrets — still private on the public repo. The **GitHub dispatch PAT** (fine-grained,
-Actions:write, this repo only, expires ~2026-10-14) lives ONLY in **Supabase
+GitHub Actions secrets — still private on the public repo. The **GitHub dispatch PAT** (fine-grained
+`desk-dispatch`, Actions: Read and write, this repo only, no expiry set) lives ONLY in **Supabase
 Vault** as `gh_dispatch_token` — never in the repo, never in Actions secrets;
-rotate via Vault `update_secret` (open item).
+**regenerating it in GitHub invalidates the old value — update Vault
+in the same sitting** via `update_secret`, then verify 204 (Phases 23–27 note
+above).

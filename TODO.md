@@ -622,6 +622,15 @@
       sec_id + matched_by cleared, guarded so `FW: <COMPANY>: …` was NOT
       released); digit-leading company subjects flagged.
 
+## Phases 23–27 — DONE (2026-08-09 … 2026-10-18)
+- [x] SMTP (no phase number, config only) — custom Gmail SMTP for Supabase Auth (config only)
+- [x] 23 — password reset flow (`c5b5915`)
+- [x] 25 + 25-FIX — PWA install banner, manual-instructions state (`c8952b6`, `bc7adcb`)
+- [x] 26 — blank users row from empty DESK_DEFAULT_USER (`b41c6e4`)
+- [x] 27 + 27-FIX — email backlog: recent-first, old Bloomberg skipped, Hebrew charset fallback (`64b58b9`)
+      Still to confirm in prod logs: `EMAIL old-bloomberg-skipped`, no 5-min timeout.
+- [x] 2026-10-18 — dispatch token incident: Vault `gh_dispatch_token` updated, 204 verified.
+
 ## Before public launch (security, not blocking the invite-only group)
 - [ ] **15F — password reset flow** (Supabase Site/Redirect URLs must be set,
       or link emails point at the localhost:3000 default).
@@ -648,8 +657,9 @@
 6. [ ] Node.js 20 deprecation warnings in workflow actions (cosmetic, low).
 7. [ ] CORS narrowing: ALLOWED_ORIGIN_RE `*.vercel.app` → the exact app URL
        (low; public-data proxy, JWT on).
-8. [ ] **PAT rotation ~2026-10-14** — the fine-grained dispatch token expires;
-       refresh via Vault `update_secret` one-liner ('gh_dispatch_token').
+8. [x] **PAT rotation** — DONE 2026-10-18 (late: Vault was stale for ~2 weeks,
+       see CLAUDE.md Phases 23–27). `desk-dispatch` now has no expiry; any
+       future regenerate must update Vault `gh_dispatch_token` immediately.
 9. [ ] **fetched_at semantics investigation** — overwritten-per-run vs
        ON-CONFLICT-preserved is UNKNOWN (evidence destroyed by the maya
        re-collect); nothing may be built on it until resolved (lesson 3d).
@@ -674,6 +684,10 @@
 15. [ ] **Macro step runtime** (born 2026-07-30) — ~1m22s with four feeds (was
         ~9s with two) against `timeout-minutes: 5`. Revisit before adding a
         fifth feed.
+16. [ ] **Healthchecks: alert on every DOWN** and consider a daily guard that
+        fails if `net._http_response` has non-204 rows in the last hour.
+17. [ ] **9 Dependabot vulnerabilities** (4 high, 5 moderate) on the default branch.
+18. [ ] **Version `sql/005_*`** migration files (still untracked).
 - Carried over:
   - [ ] Decide bond price source (DataHub paid EOD vs manual tier) — manual
         tier now exists as a stopgap for unpriced securities
