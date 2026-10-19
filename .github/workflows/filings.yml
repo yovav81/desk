@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   filings:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest moved to 26.04, unsupported by Playwright 1.58 (2026-10-19)
     env:
       DESK_DB_URL: ${{ secrets.DESK_DB_URL }}
       DESK_DEFAULT_USER: ${{ secrets.DESK_DEFAULT_USER }}
