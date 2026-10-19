@@ -671,6 +671,13 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   `select created, status_code from net._http_response order by created desc limit 5;`
   must show 204, and Actions must show `workflow_dispatch` runs every ~15 min.
   Runs that are ALL "Scheduled" with multi-hour gaps = dispatch is dead.
+- **Runner pin — `filings.yml` is on `ubuntu-24.04`, NOT `ubuntu-latest`
+  (2026-10-19, `77b0288`).** GitHub moved `ubuntu-latest` to 26.04 and
+  Playwright 1.58 cannot install chromium there ("does not support chromium on
+  ubuntu26.04-x64"), so every filings run died at the "Install Chromium" step
+  while collect (no browser) stayed green. Keep the pin until `requirements.txt`
+  moves to a Playwright release that supports 26.04. `collect.yml` and
+  `tase_list.yml` are still on `ubuntu-latest` (no browser).
 
 ## Security posture (Phase 15 — audit in research/SECURITY_AUDIT_FINDINGS.md)
 
