@@ -29,7 +29,7 @@ jobs:
 
       - name: Headless Chromium vs CBS media releases
         run: |
-          python3 - <<'PY'
+          python3 - <<'PY' 2>&1 | tee /tmp/probe_out.txt
           import re
           from playwright.sync_api import sync_playwright
           UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
@@ -61,4 +61,13 @@ jobs:
                   except Exception as e:
                       print("search API", q, "FAILED", repr(e)[:200])
               b.close()
+          PY
+
+      - name: Publish result as annotation (readable via API)
+        if: always()
+        run: |
+          python3 - <<'PY'
+          t = open("/tmp/probe_out.txt", encoding="utf-8", errors="replace").read()[:30000]
+          t = t.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+          print("::notice title=cbs-probe::" + t)
           PY

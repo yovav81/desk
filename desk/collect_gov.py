@@ -42,6 +42,14 @@ _REL_HREF = re.compile(r"^https?://(?:www\.)?boi\.org\.il/publications/pressrele
 _DATE_LINE = re.compile(r"^\s*(\d{2})/(\d{2})/(\d{4})\s*$")
 
 
+def annotate(level: str, title: str, msg: str) -> None:
+    """GitHub Actions annotation (`::notice`/`::warning`) — shows on the run page
+    and is readable through the check-runs API; plain stdout elsewhere."""
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        msg = msg.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+        print(f"::{level} title={title}::{msg}", flush=True)
+
+
 def gov_active(now: datetime) -> bool:
     """Half-hourly gate (same idea as GDELT's hourly one). filings.yml starts
     every ~5 min, so minutes 0-5 of :00/:30 catch a run; GOV_FORCE=1 overrides."""
@@ -124,12 +132,14 @@ def collect() -> None:
     now = datetime.now(timezone.utc)
     if not gov_active(now):
         log.info("GOV gated off this run (minute %d)", now.minute)
+        annotate("notice", "GOV boi", f"gated off (minute {now.minute})")
         return
 
     items = parse_boi_links(fetch_boi_links(), now)
     if not items:
         # A dead/blocked source must scream (house rule) — but never fail the lane.
         log.warning("GOV boi read=0 — FEED SILENT")
+        annotate("warning", "GOV boi", "read=0 FEED SILENT")
         return
 
     engine = get_engine()
@@ -150,6 +160,9 @@ def collect() -> None:
                 inserted += 1
     log.info("GOV boi read=%d inserted=%d duplicate=%d skipped_stale=%d",
              len(items), inserted, attempted - inserted, stale)
+    annotate("notice", "GOV boi",
+             f"read={len(items)} inserted={inserted} duplicate={attempted - inserted} "
+             f"skipped_stale={stale} newest={items[0]['title'][:60]}")
 
 
 if __name__ == "__main__":
