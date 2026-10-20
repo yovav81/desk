@@ -1,0 +1,44 @@
+name: probe-gov
+
+# ONE-OFF diagnostic (manual only): what does a GitHub runner actually see at
+# Bank of Israel / CBS? Prints status + head of body + feed/API hints so the
+# collector parser is written against measured HTML, not a guess. Delete after use.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Probe BoI + CBS
+        run: |
+          python3 - <<'PY'
+          import re, urllib.request
+          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) DeskCollector/0.1"
+          URLS = [
+            "https://boi.org.il/publications/pressreleases/",
+            "https://www.boi.org.il/en/communication-and-publications/press-releases/",
+            "https://www.cbs.gov.il/he/mediarelease/Pages/default.aspx",
+            "https://www.cbs.gov.il/he/Pages/RSS.aspx",
+            "https://www.cbs.gov.il/he/pages/default.aspx",
+          ]
+          for u in URLS:
+              print("=" * 70); print("URL", u)
+              try:
+                  req = urllib.request.Request(u, headers={"User-Agent": UA, "Accept-Language": "he,en;q=0.8"})
+                  with urllib.request.urlopen(req, timeout=20) as r:
+                      body = r.read().decode("utf-8", "replace")
+                      print("status", r.status, "len", len(body), "ctype", r.headers.get("content-type"))
+              except Exception as e:
+                  print("FAILED:", repr(e)); continue
+              hints = sorted(set(re.findall(r'(?:href|src)="([^"]*(?:rss|feed|api|json|\.xml)[^"]*)"', body, re.I)))[:25]
+              print("hints:", hints)
+              print("head:", re.sub(r"\s+", " ", body[:1500]))
+              if "pressreleases" in u and "boi.org.il" in u and "/en/" not in u:
+                  items = re.findall(r'<a[^>]+href="([^"]*/pressreleases/[^"]+)"[^>]*>(.*?)</a>', body, re.S)[:12]
+                  print("press-release links:", [(h, re.sub(r"<[^>]+>|\s+", " ", t).strip()[:80]) for h, t in items])
+          PY
