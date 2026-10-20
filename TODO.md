@@ -631,6 +631,11 @@
       Still to confirm in prod logs: `EMAIL old-bloomberg-skipped`, no 5-min timeout.
 - [x] 2026-10-18 — dispatch token incident: Vault `gh_dispatch_token` updated, 204 verified.
 
+## Phase 28: Bank of Israel releases in macro — DONE (2026-10-20)
+- [x] `desk/collect_gov.py` + filings.yml step (headless Chromium; Radware)
+- [x] Verified in prod: read=13 inserted/duplicate/skipped_stale accounted for
+- [ ] CBS (הלמ"ס) releases — blocked from runners (F5); open decision, see CLAUDE.md
+
 ## Before public launch (security, not blocking the invite-only group)
 - [ ] **15F — password reset flow** (Supabase Site/Redirect URLs must be set,
       or link emails point at the localhost:3000 default).

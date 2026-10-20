@@ -678,6 +678,28 @@ All work stays inside `C:\desk`. Never read or write `C:\invest`,
   while collect (no browser) stayed green. Keep the pin until `requirements.txt`
   moves to a Playwright release that supports 26.04. `collect.yml` and
   `tase_list.yml` are still on `ubuntu-latest` (no browser).
+- **Phase 28 — Bank of Israel press releases → macro tab (2026-10-20,
+  `desk/collect_gov.py`, step "Collect Bank of Israel releases" in filings.yml).**
+  boi.org.il answers a plain HTTP client with a **Radware JS-challenge loader**
+  (MEASURED from a runner); headless Chromium clears it and renders the list
+  (dated links), so the collector runs in the filings lane (Chromium already
+  installed there). No RSS/API exists; Google News `site:boi.org.il` returns
+  tenders and old pages. Rows: `news`, `source='boi'`, `category='macro'`,
+  `sec_id` NULL → the macro tab needs no UI change. Never `networkidle` (never
+  settles on this site — wait for the links). The list gives a DATE only:
+  today's releases get first-seen time, older ones Israel midnight — no invented
+  clock times. Gated to minutes 0–5 of each half hour (`GOV_FORCE=1` overrides),
+  fail-soft (`FEED SILENT` warning, exit 0), 4-min step timeout, the 7-day
+  staleness gate applies (first run: read=13, skipped_stale=12). The result is
+  also emitted as a GitHub **annotation** (`GOV boi`) — annotations are readable
+  through the check-runs API even where run logs are not.
+  **CBS (הלמ"ס) is NOT collected:** its media-release list is a SharePoint search
+  web part; from a runner the page renders but the search call is reset (F5
+  shield) and the box says "something went wrong". Google News `site:cbs.gov.il`
+  is fresh but sparse (~12 items/14 days vs daily releases) and misleading (the
+  September-2026 CPI release surfaced as a "September 2023" page, empty titles,
+  English duplicates) — rejected. CPI/GDP/unemployment prints already arrive via
+  the Ynet/Globes/Calcalist macro feeds.
 
 ## Security posture (Phase 15 — audit in research/SECURITY_AUDIT_FINDINGS.md)
 
