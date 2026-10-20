@@ -1,11 +1,10 @@
 name: probe-gov
 
-# ONE-OFF diagnostic (manual only), round 2. Round 1 showed: BoI serves a Radware
-# JS-challenge loader to a plain HTTP client; CBS serves its real page but the
-# release list is JS-rendered. This round measures (1) Google News RSS for both
-# domains, (2) the JS/API URLs behind CBS's release list, (3) whether headless
-# Chromium gets through BoI's Radware loader. Output is kept SHORT on purpose.
-# Delete after use.
+# ONE-OFF diagnostic (manual only), round 3 — CBS only. BoI is solved (headless
+# Chromium renders its list; see desk/collect_gov.py). This renders CBS's
+# media-release page in Chromium and records (a) the release links that appear,
+# (b) every JSON/API request the page makes, (c) whether the SharePoint search
+# REST endpoint answers. Output is SHORT on purpose. Delete after use.
 on:
   workflow_dispatch: {}
 
@@ -23,68 +22,43 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Plain-HTTP probes (Google News + CBS JS/API hints)
-        run: |
-          python3 - <<'PY'
-          import re, urllib.request
-          from urllib.parse import quote, urljoin
-          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) DeskCollector/0.1"
-          def get(u, n=None):
-              req = urllib.request.Request(u, headers={"User-Agent": UA, "Accept-Language": "he,en;q=0.8"})
-              with urllib.request.urlopen(req, timeout=20) as r:
-                  return r.status, r.read().decode("utf-8", "replace")
-          print("=== 1. Google News RSS (site-restricted)")
-          for q in ["site:boi.org.il", "site:cbs.gov.il", "בנק ישראל הודעה לעיתונות", "הלמ\"ס הודעה לתקשורת"]:
-              u = "https://news.google.com/rss/search?q=%s&hl=he&gl=IL&ceid=IL:he" % quote(q, safe="")
-              try:
-                  s, b = get(u)
-                  titles = re.findall(r"<item>.*?<title>(.*?)</title>.*?<link>(.*?)</link>.*?<pubDate>(.*?)</pubDate>", b, re.S)
-                  src = re.findall(r"<source[^>]*>(.*?)</source>", b)
-                  print("Q", q, "status", s, "items", len(titles), "sources", sorted(set(src))[:8])
-                  for t in titles[:5]: print("   ", t[2], "|", t[0][:90])
-              except Exception as e:
-                  print("Q", q, "FAILED", repr(e))
-          print("=== 2. CBS release page: scripts + API hints")
-          try:
-              s, b = get("https://www.cbs.gov.il/he/mediarelease/Pages/default.aspx")
-              scripts = sorted(set(re.findall(r'src="([^"]+\.js[^"]*)"', b)))
-              print("scripts:", [x for x in scripts if "CBSRev" in x or "mediarelease" in x.lower()][:15])
-              print("inline api hints:", sorted(set(re.findall(r'["\'](/[^"\']*(?:_api|api/|Handler|\.ashx|\.svc|json)[^"\']*)["\']', b)))[:15])
-              for js in [x for x in scripts if "CBSRev" in x][:8]:
-                  try:
-                      _, jb = get(urljoin("https://www.cbs.gov.il/", js))
-                      hits = sorted(set(re.findall(r'["\'`]((?:https?:)?/[^"\'`\s]*(?:_api|api/|\.ashx|\.svc|mediarelease|MediaRelease|rss|json)[^"\'`\s]*)["\'`]', jb)))[:10]
-                      if hits: print(js[-60:], "->", hits)
-                  except Exception as e:
-                      print(js[-60:], "FAILED", repr(e))
-          except Exception as e:
-              print("CBS FAILED", repr(e))
-          PY
-
       - name: Install Playwright + Chromium
         run: |
           pip install playwright==1.58.0
           python -m playwright install --with-deps chromium
 
-      - name: Headless Chromium vs BoI Radware
+      - name: Headless Chromium vs CBS media releases
         run: |
           python3 - <<'PY'
           import re
           from playwright.sync_api import sync_playwright
+          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
           with sync_playwright() as p:
-              b = p.chromium.launch(headless=True)
-              ctx = b.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36", locale="he-IL")
+              b = p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
+              ctx = b.new_context(user_agent=UA, locale="he-IL", viewport={"width": 1366, "height": 900})
+              ctx.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
               pg = ctx.new_page()
+              reqs = []
+              pg.on("response", lambda r: reqs.append((r.status, r.request.method, r.url)) if re.search(r"_api|\.ashx|\.svc|json|search|mediarelease", r.url, re.I) and not re.search(r"\.(png|jpg|svg|css|woff2?)(\?|$)", r.url, re.I) else None)
               try:
-                  pg.goto("https://boi.org.il/publications/pressreleases/", wait_until="networkidle", timeout=45000)
-                  pg.wait_for_timeout(5000)
+                  pg.goto("https://www.cbs.gov.il/he/mediarelease/Pages/default.aspx", wait_until="domcontentloaded", timeout=45000)
+                  pg.wait_for_timeout(12000)
               except Exception as e:
                   print("goto issue:", repr(e))
               print("title:", pg.title())
-              links = pg.eval_on_selector_all("a[href*='/pressreleases/']", "els => els.map(e => [e.href, e.innerText.trim().slice(0,80)])")
-              print("press-release links:", len(links))
-              for l in links[:12]: print("  ", l)
-              html = pg.content()
-              print("len", len(html), "radware" , "Radware" in html)
+              links = pg.eval_on_selector_all("a", "els => els.map(e => [e.href, (e.innerText||'').trim().replace(/\\s+/g,' ').slice(0,90)])")
+              rel = [l for l in links if re.search(r"mediarelease|/he/mediarelease/pages/", l[0], re.I) and l[1]]
+              print("anchors total:", len(links), "| mediarelease-ish:", len(rel))
+              for l in rel[:15]: print("  ", l)
+              print("API-ish responses:", len(reqs))
+              for r in reqs[:20]: print("  ", r)
+              body = pg.inner_text("body")
+              print("body text sample:", re.sub(r"\s+", " ", body)[:600])
+              for q in ["querytext='ContentType:*'&rowlimit=3", "querytext='mediarelease'&rowlimit=3"]:
+                  try:
+                      r = pg.request.get("https://www.cbs.gov.il/_api/search/query?" + q, headers={"Accept": "application/json;odata=nometadata"})
+                      print("search API", q, "->", r.status, r.text()[:300].replace("\n", " "))
+                  except Exception as e:
+                      print("search API", q, "FAILED", repr(e)[:200])
               b.close()
           PY

@@ -67,6 +67,14 @@ jobs:
       - name: Collect MAYA filings
         run: python -m desk.collect_maya
 
+      # Bank of Israel press releases -> macro tab (Phase 28). Fail-soft (exits 0
+      # even if the page is blocked), gated inside the module to minutes 0-5 of
+      # each half hour, bounded by a hard timeout so a hung browser can never
+      # delay SEC for long. Chromium is already installed above.
+      - name: Collect Bank of Israel releases
+        timeout-minutes: 4
+        run: python -m desk.collect_gov
+
       # SEC last: the only step with a hard-fail mode (SystemExit if
       # SEC_USER_AGENT is unset), so a config error can never block MAYA.
       # --commit is required: the CLI defaults to dry-run.
